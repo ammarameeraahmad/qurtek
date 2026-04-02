@@ -1,36 +1,78 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# QURTEK
 
-## Getting Started
+Dokumentasi Sampai, Shohibul Tenang.
 
-First, run the development server:
+Platform dokumentasi qurban berbasis Next.js + Supabase dengan 3 role terpisah:
+- Admin: ` /admin `
+- Petugas: ` /petugas `
+- Shohibul: ` /d/{token} `
+
+## Fitur yang sudah diimplementasikan
+
+- Panel Admin dengan login username/password.
+- CRUD data Shohibul, Hewan, dan Petugas.
+- Generate link unik Shohibul + template pesan WhatsApp.
+- Generate QR code hewan.
+- Portal Petugas dengan login PIN, QR scanner kamera, checklist tahapan, upload media.
+- Upload media ke Supabase Storage bucket `qurban_media`.
+- Auto update status tracking dan auto push notification saat tahap selesai.
+- Portal Shohibul real-time: status timeline + galeri + download ZIP.
+- PWA service worker + web push subscription flow.
+- SQL schema lengkap sesuai plan di file `supabase/schema.sql`.
+
+## 1) Setup environment variables
+
+Salin `.env.example` menjadi `.env.local`, lalu isi nilainya:
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+cp .env.example .env.local
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Wajib diisi:
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `NEXT_PUBLIC_VAPID_PUBLIC_KEY`
+- `VAPID_PRIVATE_KEY`
+- `ADMIN_USERNAME`
+- `ADMIN_PASSWORD`
+- `ADMIN_SESSION_SECRET`
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Opsional:
+- `NEXT_PUBLIC_STORAGE_BUCKET` (default: `qurban_media`)
+- `VAPID_SUBJECT` (default: `mailto:admin@qurtek.id`)
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## 2) Jalankan schema SQL di Supabase
 
-## Learn More
+1. Buka Supabase SQL Editor.
+2. Copy isi file `supabase/schema.sql`.
+3. Jalankan query sampai selesai.
+4. Buka menu Storage dan pastikan bucket `qurban_media` ada.
 
-To learn more about Next.js, take a look at the following resources:
+## 3) Jalankan aplikasi lokal
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```bash
+npm install
+npm run dev
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Buka `http://localhost:3000`.
 
-## Deploy on Vercel
+## 4) Urutan penggunaan di aplikasi
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+1. Login admin di ` /admin `.
+2. Tambah data hewan, shohibul, petugas.
+3. Generate QR hewan dan tempel ke kalung/tali hewan.
+4. Petugas login di ` /petugas ` pakai PIN.
+5. Petugas scan QR / input kode, upload media per tahap, klik selesai tahap.
+6. Shohibul buka link unik ` /d/{token} `, izinkan notifikasi, pantau dokumentasi.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## 5) Deploy
+
+Deploy ke Vercel, lalu masukkan semua environment variable yang sama seperti `.env.local`.
+
+## Catatan penting
+
+- Notifikasi web push membutuhkan VAPID keys valid.
+- API admin menggunakan cookie session berbasis environment variable.
+- Untuk produksi, wajib gunakan password admin kuat dan `ADMIN_SESSION_SECRET` acak panjang.

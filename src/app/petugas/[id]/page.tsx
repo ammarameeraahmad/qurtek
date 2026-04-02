@@ -1,10 +1,10 @@
-import UploadMediaForm from "@/components/UploadMediaForm";
+import { redirect } from "next/navigation";
 
-export default function PetugasUploadPage({ params }: { params: { id: string } }) {
-  return (
-    <div className="max-w-xl mx-auto p-8">
-      <h1 className="text-2xl font-bold mb-4">Upload Dokumentasi Hewan</h1>
-      <UploadMediaForm hewanId={params.id} />
-    </div>
-  );
+export default async function PetugasUploadPage({
+  params,
+}: {
+  params: Promise<{ id: string }>;
+}) {
+  const { id } = await params;
+  redirect(`/petugas?kode=${encodeURIComponent(id)}`);
 }
