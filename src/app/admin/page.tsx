@@ -40,6 +40,14 @@ type PetugasRow = {
   is_active: boolean;
 };
 
+type DistribusiRow = {
+  id: string;
+  hewan_id: string;
+  shohibul_id: string;
+  berat_kg: number | null;
+  diterima_at: string | null;
+};
+
 const initialMetrics: DashboardMetrics = {
   sapi: 0,
   kambing: 0,
@@ -68,6 +76,7 @@ export default function AdminPage() {
   const [shohibulRows, setShohibulRows] = useState<ShohibulRow[]>([]);
   const [hewanRows, setHewanRows] = useState<HewanRow[]>([]);
   const [petugasRows, setPetugasRows] = useState<PetugasRow[]>([]);
+  const [distribusiRows, setDistribusiRows] = useState<DistribusiRow[]>([]);
 
   const [shohibulForm, setShohibulForm] = useState({
     nama: "",
@@ -92,6 +101,12 @@ export default function AdminPage() {
     pin: "",
   });
 
+  const [distribusiForm, setDistribusiForm] = useState({
+    hewan_id: "",
+    shohibul_id: "",
+    berat_kg: "",
+  });
+
   const [qrPreview, setQrPreview] = useState<{ kode: string; dataUrl: string } | null>(null);
   const [origin, setOrigin] = useState("");
 
@@ -105,29 +120,33 @@ export default function AdminPage() {
       setLoading(true);
       setError("");
 
-      const [dashboardRes, shohibulRes, hewanRes, petugasRes] = await Promise.all([
+      const [dashboardRes, shohibulRes, hewanRes, petugasRes, distribusiRes] = await Promise.all([
         fetch("/api/admin/dashboard", { cache: "no-store" }),
         fetch("/api/admin/shohibul", { cache: "no-store" }),
         fetch("/api/admin/hewan", { cache: "no-store" }),
         fetch("/api/admin/petugas", { cache: "no-store" }),
+        fetch("/api/admin/distribusi", { cache: "no-store" }),
       ]);
 
-      const [dashboardJson, shohibulJson, hewanJson, petugasJson] = await Promise.all([
+      const [dashboardJson, shohibulJson, hewanJson, petugasJson, distribusiJson] = await Promise.all([
         dashboardRes.json(),
         shohibulRes.json(),
         hewanRes.json(),
         petugasRes.json(),
+        distribusiRes.json(),
       ]);
 
       if (!dashboardRes.ok) throw new Error(dashboardJson.error || "Gagal memuat dashboard.");
       if (!shohibulRes.ok) throw new Error(shohibulJson.error || "Gagal memuat data shohibul.");
       if (!hewanRes.ok) throw new Error(hewanJson.error || "Gagal memuat data hewan.");
       if (!petugasRes.ok) throw new Error(petugasJson.error || "Gagal memuat data petugas.");
+      if (!distribusiRes.ok) throw new Error(distribusiJson.error || "Gagal memuat data distribusi.");
 
       setMetrics(dashboardJson.metrics || initialMetrics);
       setShohibulRows(shohibulJson.data || []);
       setHewanRows(hewanJson.data || []);
       setPetugasRows(petugasJson.data || []);
+      setDistribusiRows(distribusiJson.data || []);
     } catch (err) {
       if (err instanceof Error && err.message.toLowerCase().includes("akses admin ditolak")) {
         setIsAuthed(false);
@@ -189,6 +208,7 @@ export default function AdminPage() {
     setShohibulRows([]);
     setHewanRows([]);
     setPetugasRows([]);
+    setDistribusiRows([]);
   }
 
   async function handleCreateShohibul(e: FormEvent<HTMLFormElement>) {
@@ -272,6 +292,60 @@ export default function AdminPage() {
       setError(err instanceof Error ? err.message : "Gagal menambah petugas.");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function handleCreateDistribusi(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setBusy(true);
+    setError("");
+    setSuccess("");
+
+    try {
+      const res = await fetch("/api/admin/distribusi", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...distribusiForm,
+          berat_kg: distribusiForm.berat_kg ? Number(distribusiForm.berat_kg) : null,
+        }),
+      });
+
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Gagal menyimpan distribusi.");
+
+      setDistribusiForm({ hewan_id: "", shohibul_id: "", berat_kg: "" });
+      setSuccess("Data distribusi berhasil disimpan.");
+      await loadAll();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Gagal menyimpan distribusi.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleExportLaporan() {
+    setError("");
+    setSuccess("");
+
+    try {
+      const res = await fetch("/api/admin/export");
+      if (!res.ok) {
+        const json = await res.json();
+        throw new Error(json.error || "Gagal export laporan.");
+      }
+
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `laporan-qurtek-${Date.now()}.csv`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+
+      setSuccess("Laporan berhasil diunduh.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Gagal export laporan.");
     }
   }
 
@@ -430,6 +504,12 @@ export default function AdminPage() {
           <p className="mt-2 text-sm text-[#475467]">
             Lengkap: {metrics.dokumentasiLengkap} hewan | Belum lengkap: {metrics.dokumentasiBelum} hewan
           </p>
+          <button
+            onClick={handleExportLaporan}
+            className="mt-3 rounded-lg border border-[#d0d5dd] px-3 py-1 text-xs font-semibold"
+          >
+            Export Laporan (CSV)
+          </button>
           <div className="mt-3 h-3 overflow-hidden rounded-full bg-[#eaecf0]">
             <div
               className="h-full rounded-full bg-[#b42318] transition-all"
@@ -688,6 +768,91 @@ export default function AdminPage() {
                 ))}
               </tbody>
             </table>
+          </div>
+        </section>
+
+        <section className="mt-6 grid gap-6 lg:grid-cols-2">
+          <form className="panel panel-admin p-5" onSubmit={handleCreateDistribusi}>
+            <h2 className="text-xl font-semibold">Input Distribusi Daging</h2>
+            <p className="mt-1 text-sm text-[#475467]">
+              Catat pembagian daging per shohibul untuk modul distribusi.
+            </p>
+
+            <div className="mt-4 grid gap-3 text-sm">
+              <select
+                value={distribusiForm.hewan_id}
+                onChange={(e) => setDistribusiForm((prev) => ({ ...prev, hewan_id: e.target.value }))}
+                className="rounded-lg border border-[#d0d5dd] px-3 py-2"
+                required
+              >
+                <option value="">Pilih Hewan</option>
+                {hewanRows.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.kode} - {item.jenis}
+                  </option>
+                ))}
+              </select>
+
+              <select
+                value={distribusiForm.shohibul_id}
+                onChange={(e) => setDistribusiForm((prev) => ({ ...prev, shohibul_id: e.target.value }))}
+                className="rounded-lg border border-[#d0d5dd] px-3 py-2"
+                required
+              >
+                <option value="">Pilih Shohibul</option>
+                {shohibulRows.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.nama}
+                  </option>
+                ))}
+              </select>
+
+              <input
+                type="number"
+                step="0.1"
+                placeholder="Berat pembagian (kg)"
+                value={distribusiForm.berat_kg}
+                onChange={(e) => setDistribusiForm((prev) => ({ ...prev, berat_kg: e.target.value }))}
+                className="rounded-lg border border-[#d0d5dd] px-3 py-2"
+              />
+
+              <button
+                disabled={busy}
+                className="rounded-lg bg-[#141414] px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+              >
+                Simpan Distribusi
+              </button>
+            </div>
+          </form>
+
+          <div className="panel panel-admin overflow-hidden">
+            <div className="border-b border-[#eaecf0] p-4">
+              <h2 className="text-xl font-semibold">Riwayat Distribusi</h2>
+            </div>
+            <div className="max-h-[360px] overflow-auto p-4">
+              {distribusiRows.length === 0 ? (
+                <p className="text-sm text-[#475467]">Belum ada data distribusi.</p>
+              ) : (
+                <div className="space-y-3">
+                  {distribusiRows.map((row) => {
+                    const hewan = hewanRows.find((item) => item.id === row.hewan_id);
+                    const shohibul = shohibulRows.find((item) => item.id === row.shohibul_id);
+
+                    return (
+                      <div key={row.id} className="rounded-lg border border-[#eaecf0] p-3 text-sm">
+                        <p className="font-semibold text-[#101828]">
+                          {hewan?.kode || "-"} → {shohibul?.nama || "-"}
+                        </p>
+                        <p className="text-[#475467]">Berat: {row.berat_kg ?? "-"} kg</p>
+                        <p className="text-[#475467]">
+                          Waktu: {row.diterima_at ? new Date(row.diterima_at).toLocaleString("id-ID") : "-"}
+                        </p>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
         </section>
       </div>
