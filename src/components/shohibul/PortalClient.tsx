@@ -83,8 +83,22 @@ export default function PortalClient({ token }: { token: string }) {
 
   useEffect(() => {
     loadPortal();
-    const timer = setInterval(loadPortal, 20000);
-    return () => clearInterval(timer);
+
+    const sse = new EventSource(`/api/portal/${token}/stream`);
+    sse.onmessage = () => {
+      loadPortal();
+    };
+
+    sse.onerror = () => {
+      sse.close();
+    };
+
+    const timer = setInterval(loadPortal, 30000);
+
+    return () => {
+      sse.close();
+      clearInterval(timer);
+    };
   }, [token]);
 
   return (
