@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseServerClient } from "@/lib/supabase-server";
 import { LABEL_TAHAP, TAHAP_URUTAN } from "@/lib/stages";
 import { enforceRateLimit } from "@/lib/rate-limit";
+import { guessLegacyKelompokNameFromId } from "@/lib/kelompok-compat";
 import {
   getReadableErrorMessage,
   isMissingColumnError,
@@ -210,7 +211,8 @@ export async function GET(
     if (!hewan) {
       const fallbackKelompokNama =
         pickFirstString(kelompok, ["nama"]) ??
-        pickFirstString(shohibul, ["kelompok_nama", "kelompok", "nama_kelompok", "group_name", "group"]);
+        pickFirstString(shohibul, ["kelompok_nama", "kelompok", "nama_kelompok", "group_name", "group"]) ??
+        guessLegacyKelompokNameFromId(kelompokId);
 
       return NextResponse.json({
         data: {
@@ -372,7 +374,8 @@ export async function GET(
     const fallbackKelompokNama =
       pickFirstString(kelompok, ["nama"]) ??
       pickFirstString(shohibul, ["kelompok_nama", "kelompok", "nama_kelompok", "group_name", "group"]) ??
-      pickFirstString(hewan, ["kelompok_nama", "kelompok", "nama_kelompok", "group_name", "group"]);
+      pickFirstString(hewan, ["kelompok_nama", "kelompok", "nama_kelompok", "group_name", "group"]) ??
+      guessLegacyKelompokNameFromId(kelompokId);
 
     const normalizedKelompok = kelompok
       ? {

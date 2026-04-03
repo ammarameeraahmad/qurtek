@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseServerClient } from "@/lib/supabase-server";
 import { isAdminAuthorized, unauthorizedResponse } from "@/lib/admin-auth";
-import { deriveLegacyKelompokId, normalizeKelompokName } from "@/lib/kelompok-compat";
+import {
+  deriveLegacyKelompokId,
+  guessLegacyKelompokNameFromId,
+  normalizeKelompokName,
+} from "@/lib/kelompok-compat";
 import {
   getReadableErrorMessage,
   isMissingColumnError,
@@ -34,6 +38,10 @@ function humanizeKelompokIdIfPossible(raw: string | null) {
   if (UUID_REGEX.test(trimmed)) return null;
 
   return trimmed;
+}
+
+function formatKelompokLabelFromId(raw: string | null) {
+  return guessLegacyKelompokNameFromId(raw) || humanizeKelompokIdIfPossible(raw);
 }
 
 async function generateKodeHewan() {
@@ -333,7 +341,7 @@ function normalizeHewanRow(
         : typeof row.kelompok === "string"
           ? row.kelompok
           : fallback.kelompok_nama) ??
-      humanizeKelompokIdIfPossible(
+      formatKelompokLabelFromId(
         readString(row, columns.kelompokId) ??
           (typeof row.kelompok_id === "string" ? row.kelompok_id : fallback.kelompok_id)
       ),
@@ -459,7 +467,7 @@ export async function GET(req: NextRequest) {
           kelompokNamaFromRow?.trim() ||
           kelompokNameByHewanId.get(id) ||
           (kelompokId ? kelompokNameById.get(kelompokId) ?? null : null) ||
-          humanizeKelompokIdIfPossible(kelompokId),
+          formatKelompokLabelFromId(kelompokId),
         created_at:
           readString(item, columns.createdAt) ??
           (typeof item.created_at === "string" ? item.created_at : null),

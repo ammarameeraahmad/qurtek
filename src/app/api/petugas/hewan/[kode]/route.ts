@@ -3,6 +3,7 @@ import { getSupabaseServerClient } from "@/lib/supabase-server";
 import { TAHAP_URUTAN } from "@/lib/stages";
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { readPetugasSession, unauthorizedPetugasResponse } from "@/lib/petugas-auth";
+import { guessLegacyKelompokNameFromId } from "@/lib/kelompok-compat";
 import {
   getReadableErrorMessage,
   isMissingColumnError,
@@ -146,6 +147,10 @@ export async function GET(
     }
 
     const hewanKelompokId = typeof hewan.kelompok_id === "string" ? hewan.kelompok_id : null;
+
+    if (!kelompokNamaFallback && hewanKelompokId) {
+      kelompokNamaFallback = guessLegacyKelompokNameFromId(hewanKelompokId);
+    }
 
     if (!kelompokNamaFallback && shohibulTable && hewanKelompokId) {
       const { data: shohibulGroupRow, error: shohibulGroupError } = await supabase

@@ -2,7 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { generateShohibulToken } from "@/lib/token";
 import { getSupabaseServerClient } from "@/lib/supabase-server";
 import { isAdminAuthorized, unauthorizedResponse } from "@/lib/admin-auth";
-import { deriveLegacyKelompokId, normalizeKelompokName } from "@/lib/kelompok-compat";
+import {
+  deriveLegacyKelompokId,
+  guessLegacyKelompokNameFromId,
+  normalizeKelompokName,
+} from "@/lib/kelompok-compat";
 import {
   getReadableErrorMessage,
   isMissingColumnError,
@@ -215,6 +219,18 @@ function buildShohibulPayloadCandidates(input: ShohibulUpsertInput) {
     porsi: input.tipe,
   };
 
+  const legacyUltraMinimalByKelompokId = {
+    nama: input.nama,
+    whatsapp: input.noWhatsapp,
+    kelompok_id: input.kelompokId,
+  };
+
+  const legacyUltraMinimalByKelompokText = {
+    nama: input.nama,
+    whatsapp: input.noWhatsapp,
+    kelompok: input.kelompokNama,
+  };
+
   const modernMinimalByKelompokText = {
     nama: input.nama,
     kelompok: input.kelompokNama,
@@ -239,6 +255,8 @@ function buildShohibulPayloadCandidates(input: ShohibulUpsertInput) {
     legacyByKelompokText,
     legacyMinimalByKelompokId,
     legacyMinimalByKelompokText,
+    legacyUltraMinimalByKelompokId,
+    legacyUltraMinimalByKelompokText,
   ];
 
   if (!input.token) {
@@ -305,6 +323,9 @@ export async function GET(req: NextRequest) {
       kelompok_nama:
         readFirstString(item, ["kelompok_nama", "kelompok", "nama_kelompok", "group_name"]) ||
         (typeof item.kelompok_id === "string" ? (kelompokNameById.get(item.kelompok_id) ?? "") : "") ||
+        guessLegacyKelompokNameFromId(
+          typeof item.kelompok_id === "string" ? item.kelompok_id : null
+        ) ||
         humanizeKelompokIdIfPossible(item.kelompok_id ?? item.group_id ?? item.kelompok_qurban_id),
       unique_token: item.unique_token ?? item.link_unik ?? item.token ?? "",
       created_at: item.created_at ?? null,
@@ -408,6 +429,9 @@ export async function POST(req: NextRequest) {
       kelompok_nama:
         readFirstString(data, ["kelompok_nama", "kelompok", "nama_kelompok", "group_name"]) ||
         kelompokNama ||
+        guessLegacyKelompokNameFromId(
+          typeof data.kelompok_id === "string" ? data.kelompok_id : null
+        ) ||
         humanizeKelompokIdIfPossible(data.kelompok_id),
       unique_token: data.unique_token ?? data.link_unik ?? data.token ?? token,
       created_at: data.created_at ?? null,
@@ -506,6 +530,9 @@ export async function PATCH(req: NextRequest) {
       kelompok_nama:
         readFirstString(data, ["kelompok_nama", "kelompok", "nama_kelompok", "group_name"]) ||
         kelompokNama ||
+        guessLegacyKelompokNameFromId(
+          typeof data.kelompok_id === "string" ? data.kelompok_id : null
+        ) ||
         humanizeKelompokIdIfPossible(data.kelompok_id),
       unique_token: data.unique_token ?? data.link_unik ?? data.token ?? "",
       created_at: data.created_at ?? null,
