@@ -15,6 +15,31 @@ type GenericRow = Record<string, unknown>;
 
 const TOKEN_REGEX = /^[A-Za-z0-9_-]{6,120}$/;
 const SIGNED_URL_TTL_SECONDS = 60 * 60 * 24;
+const IMAGE_EXTENSIONS = new Set(["jpg", "jpeg", "png", "webp", "gif", "bmp", "avif"]);
+const VIDEO_EXTENSIONS = new Set(["mp4", "webm", "mov", "m4v", "avi", "mkv"]);
+
+function normalizeTahapKey(input: string) {
+  return input
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .replace(/_+/g, "_");
+}
+
+function normalizeTahap(tahap: string): string {
+  if (!tahap) return tahap;
+  const normalized = normalizeTahapKey(tahap);
+  const found = (TAHAP_URUTAN as readonly string[]).find((t) => normalizeTahapKey(t) === normalized);
+  if (found) return found;
+
+  for (const tahapKey of TAHAP_URUTAN as readonly string[]) {
+    const label = LABEL_TAHAP[tahapKey as keyof typeof LABEL_TAHAP];
+    if (label && normalizeTahapKey(label) === normalized) return tahapKey;
+  }
+
+  return normalized || tahap;
+}
 
 function pickFirstString(row: GenericRow | null, keys: string[]) {
   if (!row) return null;
@@ -35,19 +60,28 @@ async function queryRowsByHewanRef(
   tableName: string,
   selectClause: string,
   hewanId: string,
-  hewanCode: string | null = null
+  hewanCode: string | null = null,
+  extraIds: string[] = []
 ) {
-  const probes: Array<{ column: string; value: string }> = [
-    { column: "hewan_id", value: hewanId },
-    { column: "hewan_qurban_id", value: hewanId },
-    { column: "id_hewan", value: hewanId },
-  ];
+  const probes: Array<{ column: string; value: string }> = [];
+  const relationValues = Array.from(new Set([hewanId, ...extraIds].filter(Boolean)));
+
+  for (const value of relationValues) {
+    probes.push(
+      { column: "hewan_id", value },
+      { column: "hewan_qurban_id", value },
+      { column: "id_hewan", value },
+      { column: "kelompok_id", value },
+      { column: "kelompok_qurban_id", value }
+    );
+  }
 
   if (hewanCode) {
     probes.push(
       { column: "kode_hewan", value: hewanCode },
       { column: "kode", value: hewanCode },
-      { column: "qr_code", value: hewanCode }
+      { column: "qr_code", value: hewanCode },
+      { column: "hewan_kode", value: hewanCode }
     );
   }
 
@@ -138,6 +172,69 @@ async function loadSignedUrlMap(
     }
   }
   return result;
+}
+
+function getExt(path: string) {
+  const clean = path.split("?")[0] ?? path;
+  const index = clean.lastIndexOf(".");
+  if (index < 0) return "";
+  return clean.slice(index + 1).toLowerCase();
+}
+
+function inferMediaType(path: string): "foto" | "video" {
+  const ext = getExt(path);
+  if (VIDEO_EXTENSIONS.has(ext)) return "video";
+  return "foto";
+}
+
+function inferTahapFromPath(path: string) {
+  const fileName = path.split("/").pop() ?? "";
+  const raw = fileName.split("-")[0] ?? "";
+  return normalizeTahap(raw);
+}
+
+async function loadStorageFallbackMedia(
+  supabase: ReturnType<typeof getSupabaseServerClient>,
+  bucket: string,
+  references: string[]
+) {
+  const year = String(new Date().getFullYear());
+  const prefixes = Array.from(new Set(references.filter(Boolean))).flatMap((ref) => [
+    `${year}/${ref}`,
+    ref,
+  ]);
+
+  const items: Array<{ path: string; tahap: string; tipe_media: "foto" | "video" }> = [];
+  const seenPaths = new Set<string>();
+
+  for (const prefix of prefixes) {
+    const { data, error } = await supabase.storage.from(bucket).list(prefix, {
+      limit: 100,
+      offset: 0,
+      sortBy: { column: "name", order: "desc" },
+    });
+
+    if (error || !data) continue;
+
+    for (const entry of data) {
+      if (!entry?.name || entry.id === null) continue;
+
+      const fullPath = `${prefix}/${entry.name}`;
+      if (seenPaths.has(fullPath)) continue;
+
+      const ext = getExt(fullPath);
+      if (!IMAGE_EXTENSIONS.has(ext) && !VIDEO_EXTENSIONS.has(ext)) continue;
+
+      seenPaths.add(fullPath);
+      items.push({
+        path: fullPath,
+        tahap: inferTahapFromPath(fullPath),
+        tipe_media: inferMediaType(fullPath),
+      });
+    }
+  }
+
+  return items;
 }
 
 export async function GET(
@@ -310,7 +407,8 @@ export async function GET(
             dokumentasiTable,
             "id,tahap,tipe_tahapan,tipe_media,media_type,jenis_media,media_url,url,url_media,thumbnail_url,captured_at,waktu_capture,uploaded_at,waktu_upload,created_at",
             hewanId,
-            hewanCode
+            hewanCode,
+            kelompokId ? [kelompokId] : []
           )
         : Promise.resolve([] as GenericRow[]),
     ]);
@@ -352,7 +450,7 @@ export async function GET(
 
     const signedUrlMap = await loadSignedUrlMap(supabase, bucket, Array.from(rawPaths));
 
-    const dokumentasi = dokumentasiRows
+    const dokumentasiFromTable = dokumentasiRows
       .map((item, index) => {
         const mediaPath =
           typeof item.media_url === "string"
@@ -368,12 +466,13 @@ export async function GET(
 
         return {
           id: typeof item.id === "string" ? item.id : `media-${index}`,
-          tahap:
+          tahap: normalizeTahap(
             typeof item.tahap === "string"
               ? item.tahap
               : typeof item.tipe_tahapan === "string"
                 ? item.tipe_tahapan
-                : "",
+                : ""
+          ),
           tipe_media:
             (typeof item.tipe_media === "string"
               ? item.tipe_media
@@ -413,6 +512,38 @@ export async function GET(
         const bTs = Date.parse(b.uploaded_at ?? "") || 0;
         return aTs - bTs;
       });
+
+    let dokumentasi = dokumentasiFromTable;
+
+    if (dokumentasi.length === 0) {
+      const fallbackItems = await loadStorageFallbackMedia(
+        supabase,
+        bucket,
+        [hewanId, hewanCode ?? "", kelompokId ?? ""]
+      );
+
+      if (fallbackItems.length > 0) {
+        const fallbackSignedMap = await loadSignedUrlMap(
+          supabase,
+          bucket,
+          fallbackItems.map((item) => item.path)
+        );
+
+        dokumentasi = fallbackItems.map((item, index) => ({
+          id: `fallback-${index}-${item.path}`,
+          tahap: item.tahap,
+          tipe_media: item.tipe_media,
+          media_url: item.path,
+          thumbnail_url: null,
+          captured_at: null,
+          uploaded_at: null,
+          media_public_url:
+            fallbackSignedMap.get(item.path) ??
+            supabase.storage.from(bucket).getPublicUrl(item.path).data.publicUrl,
+          thumbnail_public_url: null,
+        }));
+      }
+    }
 
     const statusByTahap = new Map(statusTracking.map((item) => [item.tahap, item]));
     const mediaCountByTahap = new Map<string, number>();
