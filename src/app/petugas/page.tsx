@@ -156,6 +156,7 @@ export default function PetugasPage() {
 
   const [isOnline, setIsOnline] = useState(true);
   const [queueCount, setQueueCount] = useState(0);
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
 
   const progress = useMemo(() => {
     if (!hewanDetail) return { selesai: 0, total: 7, percent: 0 };
@@ -186,7 +187,7 @@ export default function PetugasPage() {
     tahap: string;
     tipeMedia: string;
     file: File;
-  }) {
+  }, onProgress?: (progress: number) => void) {
     const formData = new FormData();
     formData.append("file", item.file);
     formData.append("hewanId", item.hewanId);
@@ -194,18 +195,47 @@ export default function PetugasPage() {
     formData.append("tahap", item.tahap);
     formData.append("tipeMedia", item.tipeMedia);
 
-    const res = await fetch("/api/petugas/upload", {
-      method: "POST",
-      body: formData,
-    });
+    await new Promise<void>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", "/api/petugas/upload");
 
-    const json = await res.json();
-    if (res.status === 401) {
-      localStorage.removeItem(SESSION_KEY);
-      setSession(null);
-      throw new Error("Sesi petugas berakhir. Silakan login ulang.");
-    }
-    if (!res.ok) throw new Error(json.error || "Upload gagal.");
+      xhr.upload.onprogress = (event) => {
+        if (!event.lengthComputable || !onProgress) return;
+        const percent = Math.max(1, Math.min(99, Math.round((event.loaded / event.total) * 100)));
+        onProgress(percent);
+      };
+
+      xhr.onerror = () => {
+        reject(new Error("Koneksi upload terputus. Coba lagi."));
+      };
+
+      xhr.onload = () => {
+        let json: { error?: string } = {};
+
+        try {
+          json = xhr.responseText ? JSON.parse(xhr.responseText) : {};
+        } catch {
+          json = {};
+        }
+
+        if (xhr.status === 401) {
+          localStorage.removeItem(SESSION_KEY);
+          setSession(null);
+          reject(new Error("Sesi petugas berakhir. Silakan login ulang."));
+          return;
+        }
+
+        if (xhr.status < 200 || xhr.status >= 300) {
+          reject(new Error(json.error || `Upload gagal (${xhr.status}).`));
+          return;
+        }
+
+        if (onProgress) onProgress(100);
+        resolve();
+      };
+
+      xhr.send(formData);
+    });
   }
 
   async function flushOfflineQueue() {
@@ -316,6 +346,7 @@ export default function PetugasPage() {
     setLoading(true);
     setError("");
     setSuccess("");
+    setUploadProgress(null);
 
     try {
       const processedFile = await compressAndWatermarkImage(file, hewanDetail.hewan.kode, selectedTahap);
@@ -339,8 +370,11 @@ export default function PetugasPage() {
             ? "Offline mode aktif. File masuk antrian upload, tahap bisa diselesaikan setelah online."
             : "Offline mode aktif. File masuk antrian upload."
         );
+        setUploadProgress(null);
         return;
       }
+
+      setUploadProgress(0);
 
       await uploadNow({
         hewanId: hewanDetail.hewan.id,
@@ -348,6 +382,8 @@ export default function PetugasPage() {
         tahap: selectedTahap,
         tipeMedia,
         file: processedFile,
+      }, (progressValue) => {
+        setUploadProgress(progressValue);
       });
 
       if (markDoneAfterUpload) {
@@ -365,6 +401,7 @@ export default function PetugasPage() {
       setError(err instanceof Error ? err.message : "Upload gagal.");
     } finally {
       setLoading(false);
+      setUploadProgress(null);
     }
   }
 
@@ -912,13 +949,27 @@ export default function PetugasPage() {
                         Siap upload: {file.name} ({Math.max(1, Math.round(file.size / 1024))} KB)
                       </p>
                     )}
+                    {uploadProgress !== null && (
+                      <div className="rounded-lg border border-white/25 bg-white/5 p-2">
+                        <div className="flex items-center justify-between text-xs text-white/80">
+                          <span>Mengunggah media...</span>
+                          <span>{uploadProgress}%</span>
+                        </div>
+                        <div className="mt-1 h-2 overflow-hidden rounded-full bg-white/20">
+                          <div
+                            className="h-full rounded-full bg-[#f0c03d] transition-all"
+                            style={{ width: `${uploadProgress}%` }}
+                          />
+                        </div>
+                      </div>
+                    )}
                     <div className="grid gap-2 sm:grid-cols-2">
                       <button
                         type="submit"
                         disabled={loading}
                         className="rounded-xl bg-[#f0c03d] px-4 py-2 font-semibold text-[#0b2140] disabled:opacity-70"
                       >
-                        Upload Media
+                        {uploadProgress !== null ? `Uploading... ${uploadProgress}%` : "Upload Media"}
                       </button>
                       <button
                         type="button"

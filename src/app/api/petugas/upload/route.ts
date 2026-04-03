@@ -23,6 +23,31 @@ function getExtFromType(type: string) {
   return "mp4";
 }
 
+function toUploadDiagnostics(error: unknown, bucket: string) {
+  const message = getReadableErrorMessage(error, "Upload ke storage gagal.");
+  const lower = message.toLowerCase();
+
+  if (lower.includes("bucket") && (lower.includes("not found") || lower.includes("does not exist"))) {
+    return `Bucket storage '${bucket}' tidak ditemukan. Periksa nama bucket di env NEXT_PUBLIC_STORAGE_BUCKET atau buat bucket tersebut di Supabase.`;
+  }
+
+  if (
+    lower.includes("row-level security") ||
+    lower.includes("permission") ||
+    lower.includes("not authorized") ||
+    lower.includes("unauthorized") ||
+    lower.includes("forbidden")
+  ) {
+    const serviceKeyReady = Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY);
+    if (!serviceKeyReady) {
+      return "Upload ditolak oleh policy storage. Kemungkinan SUPABASE_SERVICE_ROLE_KEY belum diset di server/deploy atau policy insert bucket belum dibuat.";
+    }
+    return "Upload ditolak oleh policy storage bucket. Periksa policy INSERT pada storage.objects untuk bucket ini.";
+  }
+
+  return message;
+}
+
 export async function POST(req: NextRequest) {
   const limited = enforceRateLimit(req, {
     key: "petugas-upload",
@@ -115,7 +140,15 @@ export async function POST(req: NextRequest) {
         upsert: false,
       });
 
-    if (uploadError) throw uploadError;
+    if (uploadError) {
+      return NextResponse.json(
+        {
+          error: toUploadDiagnostics(uploadError, bucket),
+          details: getReadableErrorMessage(uploadError, "Upload storage gagal."),
+        },
+        { status: 500 }
+      );
+    }
 
     const dokumentasiTable = await resolveTableName(supabase, "dokumentasi");
     if (!dokumentasiTable) {
