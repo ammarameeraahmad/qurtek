@@ -19,11 +19,11 @@ export type PetugasSession = {
 };
 
 function getSecret() {
-  return (
-    process.env.PETUGAS_SESSION_SECRET ||
-    process.env.ADMIN_SESSION_SECRET ||
-    "qurtek-dev-petugas-session-secret"
-  );
+  const secret = process.env.PETUGAS_SESSION_SECRET || process.env.ADMIN_SESSION_SECRET;
+  if (!secret || secret.length < 32) {
+    throw new Error("PETUGAS_SESSION_SECRET (>=32 chars) wajib diset di environment.");
+  }
+  return secret;
 }
 
 function sign(value: string) {
@@ -54,8 +54,10 @@ export function createPetugasSessionToken(session: PetugasSession) {
 }
 
 function parsePetugasSessionToken(token: string): PetugasSession | null {
-  const [payloadBase64, providedSignature] = token.split(".");
-  if (!payloadBase64 || !providedSignature) return null;
+  const parts = token.split(".");
+  if (parts.length !== 2) return null;
+
+  const [payloadBase64, providedSignature] = parts;
 
   const expectedSignature = sign(payloadBase64);
   if (!safeEqual(expectedSignature, providedSignature)) return null;
@@ -67,8 +69,10 @@ function parsePetugasSessionToken(token: string): PetugasSession | null {
     return null;
   }
 
-  if (!payload?.sub || !payload?.nama || !payload?.exp) return null;
-  if (payload.exp < Math.floor(Date.now() / 1000)) return null;
+  const now = Math.floor(Date.now() / 1000);
+  if (!payload?.sub || !payload?.nama || !payload?.iat || !payload?.exp) return null;
+  if (payload.exp < now || payload.iat > now + 60) return null;
+  if (payload.exp - payload.iat > SESSION_MAX_AGE_SECONDS + 60) return null;
 
   return {
     id: payload.sub,
@@ -81,7 +85,11 @@ export function readPetugasSession(req: NextRequest) {
   const raw = req.cookies.get(COOKIE_NAME)?.value;
   if (!raw) return null;
 
-  return parsePetugasSessionToken(raw);
+  try {
+    return parsePetugasSessionToken(raw);
+  } catch {
+    return null;
+  }
 }
 
 export function setPetugasSessionCookie(response: NextResponse, session: PetugasSession) {

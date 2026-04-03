@@ -10,6 +10,9 @@ type NormalizedSubscription = {
   auth_key: string;
 };
 
+const ALLOW_INLINE_PUSH_SUBSCRIPTION_FALLBACK =
+  process.env.ALLOW_INLINE_PUSH_SUBSCRIPTION_FALLBACK === "true";
+
 let isConfigured = false;
 
 function configureWebPush() {
@@ -157,7 +160,7 @@ export async function sendPushToTargets(
     }
   }
 
-  if (!subscriptions.length) {
+  if (!subscriptions.length && ALLOW_INLINE_PUSH_SUBSCRIPTION_FALLBACK) {
     subscriptions = await loadSubscriptionsFromShohibul(supabase, targetIds);
   }
 

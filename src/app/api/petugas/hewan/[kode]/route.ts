@@ -40,7 +40,10 @@ function normalizeTahap(tahap: string): string {
 
 type GenericRow = Record<string, unknown>;
 
-const SIGNED_URL_TTL_SECONDS = 60 * 60 * 24;
+const configuredSignedUrlTtl = Number(process.env.SIGNED_URL_TTL_SECONDS ?? "600");
+const SIGNED_URL_TTL_SECONDS = Number.isFinite(configuredSignedUrlTtl)
+  ? Math.min(Math.max(configuredSignedUrlTtl, 60), 86_400)
+  : 600;
 
 function pickFirstString(row: GenericRow | null, keys: string[]) {
   if (!row) return null;
@@ -443,6 +446,10 @@ export async function GET(
 
         if (!mediaPath) return null;
 
+        const mediaSignedUrl = signedUrlMap.get(mediaPath);
+        if (!mediaSignedUrl) return null;
+        const thumbnailSignedUrl = thumbnailPath ? (signedUrlMap.get(thumbnailPath) ?? null) : null;
+
         // Normalisasi tahap agar cocok dengan TAHAP_URUTAN
         const tahapRaw =
           typeof item.tahap === "string"
@@ -479,13 +486,8 @@ export async function GET(
                 : typeof item.created_at === "string"
                   ? item.created_at
                   : null,
-          media_public_url:
-            signedUrlMap.get(mediaPath) ??
-            supabase.storage.from(bucket).getPublicUrl(mediaPath).data.publicUrl,
-          thumbnail_public_url: thumbnailPath
-            ? (signedUrlMap.get(thumbnailPath) ??
-              supabase.storage.from(bucket).getPublicUrl(thumbnailPath).data.publicUrl)
-            : null,
+          media_public_url: mediaSignedUrl,
+          thumbnail_public_url: thumbnailSignedUrl,
         };
       })
       .filter((item): item is NonNullable<typeof item> => item !== null)
@@ -511,19 +513,24 @@ export async function GET(
           fallbackItems.map((item) => item.path)
         );
 
-        dokumentasi = fallbackItems.map((item, index) => ({
-          id: `fallback-${index}-${item.path}`,
-          tahap: item.tahap,
-          tipe_media: item.tipe_media,
-          media_url: item.path,
-          thumbnail_url: null,
-          captured_at: null,
-          uploaded_at: null,
-          media_public_url:
-            fallbackSignedMap.get(item.path) ??
-            supabase.storage.from(bucket).getPublicUrl(item.path).data.publicUrl,
-          thumbnail_public_url: null,
-        }));
+        dokumentasi = fallbackItems
+          .map((item, index) => {
+            const mediaSignedUrl = fallbackSignedMap.get(item.path);
+            if (!mediaSignedUrl) return null;
+
+            return {
+              id: `fallback-${index}-${item.path}`,
+              tahap: item.tahap,
+              tipe_media: item.tipe_media,
+              media_url: item.path,
+              thumbnail_url: null,
+              captured_at: null,
+              uploaded_at: null,
+              media_public_url: mediaSignedUrl,
+              thumbnail_public_url: null,
+            };
+          })
+          .filter((item): item is NonNullable<typeof item> => item !== null);
       }
     }
 

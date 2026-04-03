@@ -148,10 +148,7 @@ export async function POST(req: NextRequest) {
 
     if (uploadError) {
       return NextResponse.json(
-        {
-          error: toUploadDiagnostics(uploadError, bucket),
-          details: getReadableErrorMessage(uploadError, "Upload storage gagal."),
-        },
+        { error: toUploadDiagnostics(uploadError, bucket) },
         { status: 500 }
       );
     }
@@ -247,9 +244,9 @@ export async function POST(req: NextRequest) {
     };
 
     return NextResponse.json({ data: normalized }, { status: 201 });
-  } catch (error) {
+  } catch {
     return NextResponse.json(
-      { error: getReadableErrorMessage(error, "Upload media gagal.") },
+      { error: "Upload media gagal." },
       { status: 500 }
     );
   }

@@ -5,7 +5,11 @@ import { resolveExistingColumn, resolveTableName } from "@/lib/supabase-compat";
 
 export const dynamic = "force-dynamic";
 
-const TOKEN_REGEX = /^[A-Za-z0-9_-]{6,120}$/;
+const configuredMin = Number(process.env.PORTAL_TOKEN_MIN_LENGTH ?? "24");
+const TOKEN_MIN_LEN = Number.isFinite(configuredMin)
+  ? Math.min(Math.max(configuredMin, 6), 120)
+  : 24;
+const TOKEN_REGEX = new RegExp(`^[A-Za-z0-9_-]{${TOKEN_MIN_LEN},120}$`);
 
 export async function GET(
   req: NextRequest,

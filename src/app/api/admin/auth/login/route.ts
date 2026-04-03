@@ -1,6 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
+import { timingSafeEqual } from "crypto";
 import { createAdminSessionToken, getAdminCookieName } from "@/lib/admin-auth";
 import { enforceRateLimit } from "@/lib/rate-limit";
+
+function constantTimeEqual(a: string, b: string) {
+  const aBuffer = Buffer.from(a);
+  const bBuffer = Buffer.from(b);
+  if (aBuffer.length !== bBuffer.length) return false;
+  return timingSafeEqual(aBuffer, bBuffer);
+}
 
 export async function POST(req: NextRequest) {
   const limited = enforceRateLimit(req, {
@@ -16,10 +24,20 @@ export async function POST(req: NextRequest) {
     const username = String(body.username ?? "").trim();
     const password = String(body.password ?? "").trim();
 
-    const expectedUsername = process.env.ADMIN_USERNAME || "admin";
-    const expectedPassword = process.env.ADMIN_PASSWORD || "admin123456";
+    const expectedUsername = process.env.ADMIN_USERNAME;
+    const expectedPassword = process.env.ADMIN_PASSWORD;
 
-    if (username !== expectedUsername || password !== expectedPassword) {
+    if (!expectedUsername || !expectedPassword) {
+      return NextResponse.json(
+        { error: "Konfigurasi admin belum lengkap." },
+        { status: 503 }
+      );
+    }
+
+    if (
+      !constantTimeEqual(username, expectedUsername) ||
+      !constantTimeEqual(password, expectedPassword)
+    ) {
       return NextResponse.json({ error: "Username/password admin salah." }, { status: 401 });
     }
 

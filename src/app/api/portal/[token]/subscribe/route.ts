@@ -8,7 +8,13 @@ import {
   resolveTableName,
 } from "@/lib/supabase-compat";
 
-const TOKEN_REGEX = /^[A-Za-z0-9_-]{6,120}$/;
+const configuredMin = Number(process.env.PORTAL_TOKEN_MIN_LENGTH ?? "24");
+const TOKEN_MIN_LEN = Number.isFinite(configuredMin)
+  ? Math.min(Math.max(configuredMin, 6), 120)
+  : 24;
+const TOKEN_REGEX = new RegExp(`^[A-Za-z0-9_-]{${TOKEN_MIN_LEN},120}$`);
+const ALLOW_INLINE_PUSH_SUBSCRIPTION_FALLBACK =
+  process.env.ALLOW_INLINE_PUSH_SUBSCRIPTION_FALLBACK === "true";
 
 function isValidEndpoint(endpoint: string) {
   try {
@@ -159,42 +165,43 @@ export async function POST(
       }
     }
 
-    // Always mirror subscription into shohibul row when compatible columns exist.
-    // This acts as fallback if push_subscriptions cannot be read due policy/schema mismatch.
-    const inlineSubscription = {
-      endpoint,
-      keys: {
-        p256dh,
-        auth,
-      },
-    };
+    if (ALLOW_INLINE_PUSH_SUBSCRIPTION_FALLBACK) {
+      // Optional mirror for legacy deployments. Keep disabled by default.
+      const inlineSubscription = {
+        endpoint,
+        keys: {
+          p256dh,
+          auth,
+        },
+      };
 
-    const inlinePayloads = [
-      { push_subscription: inlineSubscription },
-      { subscription: inlineSubscription },
-    ];
+      const inlinePayloads = [
+        { push_subscription: inlineSubscription },
+        { subscription: inlineSubscription },
+      ];
 
-    let inlineUpdated = false;
-    let inlineUpdateError: unknown = null;
+      let inlineUpdated = false;
+      let inlineUpdateError: unknown = null;
 
-    for (const payload of inlinePayloads) {
-      const result = await supabase
-        .from(shohibulTable)
-        .update(payload)
-        .eq("id", shohibul.id);
+      for (const payload of inlinePayloads) {
+        const result = await supabase
+          .from(shohibulTable)
+          .update(payload)
+          .eq("id", shohibul.id);
 
-      if (!result.error) {
-        inlineUpdated = true;
-        inlineUpdateError = null;
-        break;
+        if (!result.error) {
+          inlineUpdated = true;
+          inlineUpdateError = null;
+          break;
+        }
+
+        inlineUpdateError = result.error;
+        if (!isMissingColumnError(result.error)) break;
       }
 
-      inlineUpdateError = result.error;
-      if (!isMissingColumnError(result.error)) break;
-    }
-
-    if (!inlineUpdated && inlineUpdateError && !isMissingColumnError(inlineUpdateError)) {
-      throw inlineUpdateError;
+      if (!inlineUpdated && inlineUpdateError && !isMissingColumnError(inlineUpdateError)) {
+        throw inlineUpdateError;
+      }
     }
 
     return NextResponse.json({ ok: true });
