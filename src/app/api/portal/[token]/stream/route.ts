@@ -1,19 +1,49 @@
 import { NextRequest } from "next/server";
 import { getSupabaseServerClient } from "@/lib/supabase-server";
+import { enforceRateLimit } from "@/lib/rate-limit";
+import { resolveExistingColumn, resolveTableName } from "@/lib/supabase-compat";
 
 export const dynamic = "force-dynamic";
+
+const TOKEN_REGEX = /^[A-Za-z0-9_-]{6,120}$/;
 
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ token: string }> }
 ) {
+  const limited = enforceRateLimit(req, {
+    key: "portal-stream",
+    maxRequests: 60,
+    windowMs: 60_000,
+    message: "Terlalu banyak koneksi realtime. Coba lagi dalam 1 menit.",
+  });
+  if (limited) return limited;
+
   const { token } = await params;
+  if (!TOKEN_REGEX.test(token)) {
+    return new Response("Unauthorized", { status: 401 });
+  }
+
   const supabase = getSupabaseServerClient();
 
+  const shohibulTable = await resolveTableName(supabase, "shohibul");
+  if (!shohibulTable) {
+    return new Response("Unauthorized", { status: 401 });
+  }
+
+  const tokenColumn = await resolveExistingColumn(supabase, shohibulTable, [
+    "unique_token",
+    "link_unik",
+    "token",
+  ]);
+  if (!tokenColumn) {
+    return new Response("Unauthorized", { status: 401 });
+  }
+
   const { data: shohibul, error } = await supabase
-    .from("shohibul")
+    .from(shohibulTable)
     .select("id")
-    .eq("unique_token", token)
+    .eq(tokenColumn, token)
     .maybeSingle();
 
   if (error || !shohibul) {

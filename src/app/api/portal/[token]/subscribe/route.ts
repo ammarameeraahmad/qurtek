@@ -1,12 +1,42 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseServerClient } from "@/lib/supabase-server";
+import { enforceRateLimit } from "@/lib/rate-limit";
+import {
+  getReadableErrorMessage,
+  isMissingColumnError,
+  resolveExistingColumn,
+  resolveTableName,
+} from "@/lib/supabase-compat";
+
+const TOKEN_REGEX = /^[A-Za-z0-9_-]{6,120}$/;
+
+function isValidEndpoint(endpoint: string) {
+  try {
+    const url = new URL(endpoint);
+    return url.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
 
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ token: string }> }
 ) {
+  const limited = enforceRateLimit(req, {
+    key: "portal-subscribe",
+    maxRequests: 20,
+    windowMs: 60_000,
+    message: "Terlalu banyak percobaan aktivasi notifikasi. Coba lagi dalam 1 menit.",
+  });
+  if (limited) return limited;
+
   try {
     const { token } = await params;
+    if (!TOKEN_REGEX.test(token)) {
+      return NextResponse.json({ error: "Format token tidak valid." }, { status: 400 });
+    }
+
     const body = await req.json();
 
     const endpoint = String(body?.endpoint ?? "").trim();
@@ -17,12 +47,34 @@ export async function POST(
       return NextResponse.json({ error: "Subscription tidak valid." }, { status: 400 });
     }
 
+    if (!isValidEndpoint(endpoint)) {
+      return NextResponse.json({ error: "Endpoint subscription tidak valid." }, { status: 400 });
+    }
+
+    if (endpoint.length > 2048) {
+      return NextResponse.json({ error: "Endpoint terlalu panjang." }, { status: 400 });
+    }
+
     const supabase = getSupabaseServerClient();
+    const shohibulTable = await resolveTableName(supabase, "shohibul");
+    if (!shohibulTable) {
+      return NextResponse.json({ error: "Tabel shohibul belum tersedia." }, { status: 503 });
+    }
+
+    const tokenColumn = await resolveExistingColumn(supabase, shohibulTable, [
+      "unique_token",
+      "link_unik",
+      "token",
+    ]);
+
+    if (!tokenColumn) {
+      return NextResponse.json({ error: "Kolom token shohibul tidak ditemukan." }, { status: 500 });
+    }
 
     const { data: shohibul, error: shohibulError } = await supabase
-      .from("shohibul")
+      .from(shohibulTable)
       .select("id")
-      .eq("unique_token", token)
+      .eq(tokenColumn, token)
       .maybeSingle();
 
     if (shohibulError) throw shohibulError;
@@ -30,38 +82,121 @@ export async function POST(
       return NextResponse.json({ error: "Link shohibul tidak valid." }, { status: 404 });
     }
 
-    const { data: existing } = await supabase
-      .from("push_subscriptions")
-      .select("id")
-      .eq("endpoint", endpoint)
-      .eq("shohibul_id", shohibul.id)
-      .maybeSingle();
+    const pushTable = await resolveTableName(supabase, "push_subscriptions");
 
-    if (existing?.id) {
-      const { error: updateError } = await supabase
-        .from("push_subscriptions")
-        .update({ p256dh_key: p256dh, auth_key: auth, is_active: true })
-        .eq("id", existing.id);
+    if (pushTable) {
+      const { data: existing, error: existingError } = await supabase
+        .from(pushTable)
+        .select("id")
+        .eq("endpoint", endpoint)
+        .eq("shohibul_id", shohibul.id)
+        .maybeSingle();
 
-      if (updateError) throw updateError;
+      if (existingError && !isMissingColumnError(existingError)) {
+        throw existingError;
+      }
+
+      if (existing?.id) {
+        const updatePayloads = [
+          { p256dh_key: p256dh, auth_key: auth, is_active: true },
+          { p256dh: p256dh, auth: auth, is_active: true },
+        ];
+
+        let updated = false;
+        let updateError: unknown = null;
+
+        for (const payload of updatePayloads) {
+          const result = await supabase
+            .from(pushTable)
+            .update(payload)
+            .eq("id", existing.id);
+
+          if (!result.error) {
+            updated = true;
+            updateError = null;
+            break;
+          }
+
+          updateError = result.error;
+          if (!isMissingColumnError(result.error)) break;
+        }
+
+        if (!updated && updateError) throw updateError;
+      } else {
+        const insertPayloads = [
+          {
+            shohibul_id: shohibul.id,
+            endpoint,
+            p256dh_key: p256dh,
+            auth_key: auth,
+            is_active: true,
+          },
+          {
+            shohibul_id: shohibul.id,
+            endpoint,
+            p256dh,
+            auth,
+            is_active: true,
+          },
+        ];
+
+        let inserted = false;
+        let insertError: unknown = null;
+
+        for (const payload of insertPayloads) {
+          const result = await supabase.from(pushTable).insert([payload]);
+          if (!result.error) {
+            inserted = true;
+            insertError = null;
+            break;
+          }
+
+          insertError = result.error;
+          if (!isMissingColumnError(result.error)) break;
+        }
+
+        if (!inserted && insertError) throw insertError;
+      }
     } else {
-      const { error: insertError } = await supabase.from("push_subscriptions").insert([
-        {
-          shohibul_id: shohibul.id,
-          endpoint,
-          p256dh_key: p256dh,
-          auth_key: auth,
-          is_active: true,
+      const inlineSubscription = {
+        endpoint,
+        keys: {
+          p256dh,
+          auth,
         },
-      ]);
+      };
 
-      if (insertError) throw insertError;
+      const payloads = [
+        { push_subscription: inlineSubscription },
+        { subscription: inlineSubscription },
+      ];
+
+      let updated = false;
+      let updateError: unknown = null;
+
+      for (const payload of payloads) {
+        const result = await supabase
+          .from(shohibulTable)
+          .update(payload)
+          .eq("id", shohibul.id);
+
+        if (!result.error) {
+          updated = true;
+          updateError = null;
+          break;
+        }
+
+        updateError = result.error;
+        if (!isMissingColumnError(result.error)) break;
+      }
+
+      if (!updated && updateError) throw updateError;
     }
 
     return NextResponse.json({ ok: true });
   } catch (error) {
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Gagal menyimpan subscription." },
+      { error: getReadableErrorMessage(error, "Gagal menyimpan subscription.") },
       { status: 500 }
     );
   }

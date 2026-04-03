@@ -1,19 +1,90 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseServerClient } from "@/lib/supabase-server";
 import { TAHAP_URUTAN } from "@/lib/stages";
+import { enforceRateLimit } from "@/lib/rate-limit";
+import { readPetugasSession, unauthorizedPetugasResponse } from "@/lib/petugas-auth";
+import {
+  getReadableErrorMessage,
+  isMissingColumnError,
+  resolveExistingColumn,
+  resolveTableName,
+} from "@/lib/supabase-compat";
+
+type GenericRow = Record<string, unknown>;
+
+async function queryRowsByHewanId(
+  supabase: ReturnType<typeof getSupabaseServerClient>,
+  tableName: string,
+  selectClause: string,
+  hewanId: string
+) {
+  for (const column of ["hewan_id", "hewan_qurban_id"]) {
+    const { data, error } = await supabase
+      .from(tableName)
+      .select(selectClause)
+      .eq(column, hewanId);
+
+    if (!error) {
+      return (data ?? []) as unknown as GenericRow[];
+    }
+
+    if (isMissingColumnError(error)) continue;
+    throw error;
+  }
+
+  return [] as GenericRow[];
+}
 
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ kode: string }> }
 ) {
+  const limited = enforceRateLimit(req, {
+    key: "petugas-hewan",
+    maxRequests: 120,
+    windowMs: 60_000,
+    message: "Terlalu banyak request scan hewan. Coba lagi dalam 1 menit.",
+  });
+  if (limited) return limited;
+
+  const petugasSession = readPetugasSession(req);
+  if (!petugasSession) return unauthorizedPetugasResponse();
+
   try {
     const { kode } = await params;
+    const trimmedKode = String(kode ?? "").trim().toUpperCase();
+    if (!trimmedKode) {
+      return NextResponse.json({ error: "Kode hewan wajib diisi." }, { status: 400 });
+    }
+
     const supabase = getSupabaseServerClient();
+    const [hewanTable, kelompokTable, statusTable, dokumentasiTable, shohibulTable] = await Promise.all([
+      resolveTableName(supabase, "hewan"),
+      resolveTableName(supabase, "kelompok"),
+      resolveTableName(supabase, "status_tracking"),
+      resolveTableName(supabase, "dokumentasi"),
+      resolveTableName(supabase, "shohibul"),
+    ]);
+
+    if (!hewanTable) {
+      return NextResponse.json({ error: "Tabel hewan belum tersedia." }, { status: 503 });
+    }
+
+    const kodeColumn = await resolveExistingColumn(supabase, hewanTable, [
+      "kode",
+      "kode_hewan",
+      "code",
+      "qr_code",
+    ]);
+
+    if (!kodeColumn) {
+      return NextResponse.json({ error: "Kolom kode hewan tidak ditemukan." }, { status: 500 });
+    }
 
     const { data: hewan, error: hewanError } = await supabase
-      .from("hewan")
-      .select("id,kode,jenis,warna,berat_est,status")
-      .eq("kode", kode)
+      .from(hewanTable)
+      .select("*")
+      .eq(kodeColumn, trimmedKode)
       .maybeSingle();
 
     if (hewanError) throw hewanError;
@@ -21,58 +92,178 @@ export async function GET(
       return NextResponse.json({ error: "Hewan tidak ditemukan." }, { status: 404 });
     }
 
-    const [kelompokResult, trackingResult, dokumentasiResult] = await Promise.all([
-      supabase.from("kelompok").select("id,nama").eq("hewan_id", hewan.id).maybeSingle(),
-      supabase
-        .from("status_tracking")
-        .select("id,tahap,waktu,catatan,petugas_id")
-        .eq("hewan_id", hewan.id)
-        .order("waktu", { ascending: true }),
-      supabase
-        .from("dokumentasi")
-        .select("id,tahap,tipe_media,uploaded_at")
-        .eq("hewan_id", hewan.id)
-        .order("uploaded_at", { ascending: true }),
-    ]);
+    const hewanArea = typeof hewan.area === "string" ? hewan.area.trim() : "";
+    const petugasArea = petugasSession.area?.trim() ?? "";
+    if (hewanArea && petugasArea && hewanArea.toLowerCase() !== petugasArea.toLowerCase()) {
+      return NextResponse.json(
+        { error: "Hewan ini bukan di area tugas Anda." },
+        { status: 403 }
+      );
+    }
 
-    const kelompok = kelompokResult.data;
+    const hewanId = String(hewan.id);
 
-    const { data: shohibul, error: shohibulError } = kelompok?.id
-      ? await supabase
-          .from("shohibul")
+    let kelompok: { id: string; nama: string } | null = null;
+
+    if (kelompokTable) {
+      for (const relationColumn of ["hewan_id", "hewan_qurban_id"]) {
+        const { data, error } = await supabase
+          .from(kelompokTable)
           .select("id,nama")
-          .eq("kelompok_id", kelompok.id)
-          .order("nama", { ascending: true })
-      : { data: [], error: null };
+          .eq(relationColumn, hewanId)
+          .maybeSingle();
 
-    if (shohibulError) throw shohibulError;
+        if (!error) {
+          if (data?.id) {
+            kelompok = {
+              id: String(data.id),
+              nama: String(data.nama ?? "Kelompok"),
+            };
+          }
+          break;
+        }
+
+        if (isMissingColumnError(error)) continue;
+        throw error;
+      }
+    }
+
+    const hewanKelompokId = typeof hewan.kelompok_id === "string" ? hewan.kelompok_id : null;
+
+    if (!kelompok && hewanKelompokId && kelompokTable) {
+      const { data: kelompokById, error: kelompokByIdError } = await supabase
+        .from(kelompokTable)
+        .select("id,nama")
+        .eq("id", hewanKelompokId)
+        .maybeSingle();
+
+      if (kelompokByIdError && !isMissingColumnError(kelompokByIdError)) {
+        throw kelompokByIdError;
+      }
+
+      if (kelompokById?.id) {
+        kelompok = {
+          id: String(kelompokById.id),
+          nama: String(kelompokById.nama ?? "Kelompok"),
+        };
+      }
+    }
+
+    if (!kelompok && hewanKelompokId) {
+      kelompok = {
+        id: hewanKelompokId,
+        nama:
+          typeof hewan.kelompok_nama === "string"
+            ? hewan.kelompok_nama
+            : `Kelompok ${hewanKelompokId.slice(0, 8)}`,
+      };
+    }
+
+    const kelompokId = kelompok?.id ?? hewanKelompokId;
+
+    let shohibul: Array<{ id: string; nama: string }> = [];
+    if (shohibulTable && kelompokId) {
+      const { data, error } = await supabase
+        .from(shohibulTable)
+        .select("id,nama")
+        .eq("kelompok_id", kelompokId)
+        .order("nama", { ascending: true });
+
+      if (error && !isMissingColumnError(error)) {
+        throw error;
+      }
+
+      shohibul = (data ?? [])
+        .filter((item) => typeof item.id === "string")
+        .map((item) => ({
+          id: String(item.id),
+          nama: String(item.nama ?? "Shohibul"),
+        }));
+    }
+
+    const trackingRows = statusTable
+      ? await queryRowsByHewanId(
+          supabase,
+          statusTable,
+          "id,tahap,waktu,catatan,petugas_id,petugas_qurban_id,created_at",
+          hewanId
+        )
+      : [];
+
+    const dokumentasiRows = dokumentasiTable
+      ? await queryRowsByHewanId(
+          supabase,
+          dokumentasiTable,
+          "id,tahap,tipe_media,media_type,uploaded_at,created_at",
+          hewanId
+        )
+      : [];
+
+    trackingRows.sort((a, b) => {
+      const aTime = Date.parse(String(a.waktu ?? a.created_at ?? "")) || 0;
+      const bTime = Date.parse(String(b.waktu ?? b.created_at ?? "")) || 0;
+      return aTime - bTime;
+    });
+
+    const tahapSelesai = new Set(
+      trackingRows
+        .map((item) => (typeof item.tahap === "string" ? item.tahap : ""))
+        .filter((value) => value.length > 0)
+    );
 
     const mediaCountByTahap: Record<string, number> = {};
     for (const tahap of TAHAP_URUTAN) mediaCountByTahap[tahap] = 0;
 
-    for (const item of dokumentasiResult.data ?? []) {
-      mediaCountByTahap[item.tahap] = (mediaCountByTahap[item.tahap] ?? 0) + 1;
+    for (const item of dokumentasiRows) {
+      const tahap = typeof item.tahap === "string" ? item.tahap : "";
+      if (!tahap) continue;
+      mediaCountByTahap[tahap] = (mediaCountByTahap[tahap] ?? 0) + 1;
     }
 
-    const statusByTahap = new Set((trackingResult.data ?? []).map((item) => item.tahap));
+    const normalizedHewan = {
+      id: hewanId,
+      kode:
+        typeof hewan[kodeColumn] === "string"
+          ? String(hewan[kodeColumn])
+          : trimmedKode,
+      jenis:
+        (typeof hewan.jenis === "string"
+          ? hewan.jenis
+          : typeof hewan.jenis_qurban === "string"
+            ? hewan.jenis_qurban
+            : "sapi") as "sapi" | "kambing",
+      warna:
+        typeof hewan.warna === "string"
+          ? hewan.warna
+          : typeof hewan.warna_bulu === "string"
+            ? hewan.warna_bulu
+            : null,
+      berat_est:
+        typeof hewan.berat_est === "number"
+          ? hewan.berat_est
+          : typeof hewan.berat === "number"
+            ? hewan.berat
+            : null,
+      status: typeof hewan.status === "string" ? hewan.status : "registered",
+    };
 
     return NextResponse.json({
       data: {
-        hewan,
+        hewan: normalizedHewan,
         kelompok,
-        shohibul: shohibul ?? [],
-        status_tracking: trackingResult.data ?? [],
-        dokumentasi: dokumentasiResult.data ?? [],
+        shohibul,
+        status_tracking: trackingRows,
+        dokumentasi: dokumentasiRows,
         checklist: TAHAP_URUTAN.map((tahap) => ({
           tahap,
-          selesai: statusByTahap.has(tahap),
+          selesai: tahapSelesai.has(tahap),
           media: mediaCountByTahap[tahap] ?? 0,
         })),
       },
     });
   } catch (error) {
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Gagal mengambil detail hewan." },
+      { error: getReadableErrorMessage(error, "Gagal mengambil detail hewan.") },
       { status: 500 }
     );
   }

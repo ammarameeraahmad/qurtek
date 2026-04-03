@@ -183,6 +183,11 @@ export default function PetugasPage() {
     });
 
     const json = await res.json();
+    if (res.status === 401) {
+      localStorage.removeItem(SESSION_KEY);
+      setSession(null);
+      throw new Error("Sesi petugas berakhir. Silakan login ulang.");
+    }
     if (!res.ok) throw new Error(json.error || "Upload gagal.");
   }
 
@@ -225,6 +230,11 @@ export default function PetugasPage() {
       const code = extractKode(kodeInput);
       const res = await fetch(`/api/petugas/hewan/${encodeURIComponent(code)}`, { cache: "no-store" });
       const json = await res.json();
+      if (res.status === 401) {
+        localStorage.removeItem(SESSION_KEY);
+        setSession(null);
+        throw new Error("Sesi petugas berakhir. Silakan login ulang.");
+      }
       if (!res.ok) throw new Error(json.error || "Hewan tidak ditemukan.");
 
       setHewanDetail(json.data);
@@ -329,6 +339,11 @@ export default function PetugasPage() {
       });
 
       const json = await res.json();
+      if (res.status === 401) {
+        localStorage.removeItem(SESSION_KEY);
+        setSession(null);
+        throw new Error("Sesi petugas berakhir. Silakan login ulang.");
+      }
       if (!res.ok) throw new Error(json.error || "Gagal update status tahap.");
 
       setSuccess(`Tahap ${LABEL_TAHAP[selectedTahap as keyof typeof LABEL_TAHAP]} selesai.`);
@@ -433,7 +448,8 @@ export default function PetugasPage() {
     };
   }, [scanActive]);
 
-  function logout() {
+  async function logout() {
+    await fetch("/api/petugas/logout", { method: "POST" });
     localStorage.removeItem(SESSION_KEY);
     setSession(null);
     setHewanDetail(null);

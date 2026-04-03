@@ -117,7 +117,7 @@ export default function PortalClient({ token }: { token: string }) {
           <div className="grid gap-5 lg:grid-cols-[1.05fr_1fr]">
             <section className="space-y-5">
               <article className="panel panel-shohibul p-5">
-                <p className="text-sm text-[#365848]">Assalamu'alaikum,</p>
+                <p className="text-sm text-[#365848]">Assalamu&apos;alaikum,</p>
                 <h2 className="mt-1 text-2xl font-bold">{data.shohibul.nama}</h2>
 
                 <div className="mt-4 rounded-xl border border-[#dbe9de] bg-[#f8fcf9] p-4 text-sm text-[#143223]">

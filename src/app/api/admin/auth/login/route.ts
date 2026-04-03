@@ -1,7 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminSessionToken, getAdminCookieName } from "@/lib/admin-auth";
+import { enforceRateLimit } from "@/lib/rate-limit";
 
 export async function POST(req: NextRequest) {
+  const limited = enforceRateLimit(req, {
+    key: "admin-login",
+    maxRequests: 5,
+    windowMs: 60_000,
+    message: "Terlalu banyak percobaan login admin. Coba lagi dalam 1 menit.",
+  });
+  if (limited) return limited;
+
   try {
     const body = await req.json();
     const username = String(body.username ?? "").trim();

@@ -91,3 +91,18 @@ export async function resolveTableName(supabase: SupabaseClient, logicalName: Lo
   resolvedTableCache.set(logicalName, null);
   return null;
 }
+
+export async function resolveExistingColumn(
+  supabase: SupabaseClient,
+  tableName: string,
+  candidates: string[]
+) {
+  for (const column of candidates) {
+    const { error } = await supabase.from(tableName).select(column).limit(1);
+    if (!error) return column;
+    if (isMissingColumnError(error)) continue;
+    return null;
+  }
+
+  return null;
+}
