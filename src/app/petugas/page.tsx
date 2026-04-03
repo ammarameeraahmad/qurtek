@@ -121,8 +121,21 @@ async function compressAndWatermarkImage(file: File, kode: string, tahap: string
   });
 }
 
+function guessRecorderMimeType() {
+  if (typeof MediaRecorder === "undefined") return "";
+  if (MediaRecorder.isTypeSupported("video/webm;codecs=vp9")) return "video/webm;codecs=vp9";
+  if (MediaRecorder.isTypeSupported("video/webm;codecs=vp8")) return "video/webm;codecs=vp8";
+  if (MediaRecorder.isTypeSupported("video/webm")) return "video/webm";
+  return "";
+}
+
 export default function PetugasPage() {
   const scannerRef = useRef<{ stop: () => Promise<void>; clear: () => void } | null>(null);
+  const cameraVideoRef = useRef<HTMLVideoElement | null>(null);
+  const cameraCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const cameraStreamRef = useRef<MediaStream | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const mediaChunksRef = useRef<BlobPart[]>([]);
 
   const [pin, setPin] = useState("");
   const [session, setSession] = useState<PetugasSession | null>(null);
@@ -136,6 +149,10 @@ export default function PetugasPage() {
   const [selectedTahap, setSelectedTahap] = useState<string>(TAHAP_URUTAN[0]);
   const [tipeMedia, setTipeMedia] = useState("foto");
   const [file, setFile] = useState<File | null>(null);
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [cameraFacingMode, setCameraFacingMode] = useState<"environment" | "user">("environment");
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
 
   const [isOnline, setIsOnline] = useState(true);
   const [queueCount, setQueueCount] = useState(0);
@@ -274,8 +291,26 @@ export default function PetugasPage() {
     }
   }
 
-  async function handleUpload(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
+  async function postTahapDone(hewanId: string, tahap: string) {
+    const res = await fetch("/api/petugas/status", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        hewanId,
+        tahap,
+      }),
+    });
+
+    const json = await res.json();
+    if (res.status === 401) {
+      localStorage.removeItem(SESSION_KEY);
+      setSession(null);
+      throw new Error("Sesi petugas berakhir. Silakan login ulang.");
+    }
+    if (!res.ok) throw new Error(json.error || "Gagal update status tahap.");
+  }
+
+  async function submitUpload(markDoneAfterUpload: boolean) {
     if (!session || !hewanDetail || !file) return;
 
     setLoading(true);
@@ -298,8 +333,12 @@ export default function PetugasPage() {
           dataUrl,
         });
         writeQueue(queue);
-        setSuccess("Offline mode aktif. File masuk antrian upload.");
         setFile(null);
+        setSuccess(
+          markDoneAfterUpload
+            ? "Offline mode aktif. File masuk antrian upload, tahap bisa diselesaikan setelah online."
+            : "Offline mode aktif. File masuk antrian upload."
+        );
         return;
       }
 
@@ -311,14 +350,27 @@ export default function PetugasPage() {
         file: processedFile,
       });
 
-      setSuccess("Upload media berhasil.");
+      if (markDoneAfterUpload) {
+        await postTahapDone(hewanDetail.hewan.id, selectedTahap);
+      }
+
       setFile(null);
       await loadHewanByKode();
+      setSuccess(
+        markDoneAfterUpload
+          ? `Upload berhasil dan tahap ${LABEL_TAHAP[selectedTahap as keyof typeof LABEL_TAHAP]} diselesaikan.`
+          : "Upload media berhasil."
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Upload gagal.");
     } finally {
       setLoading(false);
     }
+  }
+
+  async function handleUpload(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    await submitUpload(false);
   }
 
   async function markTahapDone() {
@@ -328,31 +380,138 @@ export default function PetugasPage() {
     setSuccess("");
 
     try {
-      const res = await fetch("/api/petugas/status", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          hewanId: hewanDetail.hewan.id,
-          petugasId: session.id,
-          tahap: selectedTahap,
-        }),
-      });
-
-      const json = await res.json();
-      if (res.status === 401) {
-        localStorage.removeItem(SESSION_KEY);
-        setSession(null);
-        throw new Error("Sesi petugas berakhir. Silakan login ulang.");
-      }
-      if (!res.ok) throw new Error(json.error || "Gagal update status tahap.");
-
-      setSuccess(`Tahap ${LABEL_TAHAP[selectedTahap as keyof typeof LABEL_TAHAP]} selesai.`);
+      await postTahapDone(hewanDetail.hewan.id, selectedTahap);
       await loadHewanByKode();
+      setSuccess(`Tahap ${LABEL_TAHAP[selectedTahap as keyof typeof LABEL_TAHAP]} selesai.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Gagal update status.");
     } finally {
       setLoading(false);
     }
+  }
+
+  function stopCameraStream() {
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state === "recording") {
+      recorder.stop();
+    }
+
+    const stream = cameraStreamRef.current;
+    if (stream) {
+      stream.getTracks().forEach((track) => track.stop());
+      cameraStreamRef.current = null;
+    }
+
+    if (cameraVideoRef.current) {
+      cameraVideoRef.current.srcObject = null;
+    }
+  }
+
+  async function capturePhotoFromCamera() {
+    if (isRecording) {
+      setError("Hentikan rekaman video terlebih dahulu.");
+      return;
+    }
+
+    const stream = cameraStreamRef.current;
+    const video = cameraVideoRef.current;
+    if (!stream || !video) {
+      setError("Kamera belum aktif.");
+      return;
+    }
+
+    const canvas = cameraCanvasRef.current ?? document.createElement("canvas");
+    const width = video.videoWidth || 1280;
+    const height = video.videoHeight || 720;
+    canvas.width = width;
+    canvas.height = height;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      setError("Gagal mengambil frame kamera.");
+      return;
+    }
+
+    ctx.drawImage(video, 0, 0, width, height);
+
+    const blob = await new Promise<Blob | null>((resolve) =>
+      canvas.toBlob(resolve, "image/jpeg", 0.9)
+    );
+
+    if (!blob) {
+      setError("Gagal membuat file foto.");
+      return;
+    }
+
+    const capturedFile = new File([blob], `foto-${Date.now()}.jpg`, { type: "image/jpeg" });
+    setTipeMedia("foto");
+    setFile(capturedFile);
+    setSuccess("Foto dari kamera siap diupload.");
+  }
+
+  function startVideoRecording() {
+    const stream = cameraStreamRef.current;
+    if (!stream) {
+      setError("Aktifkan kamera terlebih dahulu.");
+      return;
+    }
+
+    if (typeof MediaRecorder === "undefined") {
+      setError("Browser ini belum mendukung rekam video langsung.");
+      return;
+    }
+
+    try {
+      mediaChunksRef.current = [];
+
+      const mimeType = guessRecorderMimeType();
+      const recorder = mimeType
+        ? new MediaRecorder(stream, { mimeType })
+        : new MediaRecorder(stream);
+
+      mediaRecorderRef.current = recorder;
+
+      recorder.ondataavailable = (event: BlobEvent) => {
+        if (event.data.size > 0) {
+          mediaChunksRef.current.push(event.data);
+        }
+      };
+
+      recorder.onstop = () => {
+        const chunks = mediaChunksRef.current;
+        mediaChunksRef.current = [];
+        setIsRecording(false);
+        setRecordingSeconds(0);
+
+        if (!chunks.length) {
+          setError("Rekaman video kosong.");
+          return;
+        }
+
+        const blob = new Blob(chunks, { type: recorder.mimeType || "video/webm" });
+        const ext = blob.type.includes("mp4") ? "mp4" : "webm";
+        const recordedFile = new File([blob], `video-${Date.now()}.${ext}`, {
+          type: blob.type || "video/webm",
+        });
+
+        setTipeMedia("video");
+        setFile(recordedFile);
+        setSuccess("Video dari kamera siap diupload.");
+      };
+
+      recorder.start(250);
+      setRecordingSeconds(0);
+      setIsRecording(true);
+      setSuccess("Rekam video dimulai.");
+    } catch {
+      setError("Gagal memulai rekaman video.");
+    }
+  }
+
+  function stopVideoRecording() {
+    const recorder = mediaRecorderRef.current;
+    if (!recorder || recorder.state !== "recording") return;
+    recorder.stop();
   }
 
   useEffect(() => {
@@ -448,7 +607,67 @@ export default function PetugasPage() {
     };
   }, [scanActive]);
 
+  useEffect(() => {
+    if (!cameraOpen) {
+      stopCameraStream();
+      return;
+    }
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        if (!navigator.mediaDevices?.getUserMedia) {
+          throw new Error("Browser tidak mendukung akses kamera.");
+        }
+
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: cameraFacingMode,
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+          },
+          audio: false,
+        });
+
+        if (cancelled) {
+          stream.getTracks().forEach((track) => track.stop());
+          return;
+        }
+
+        cameraStreamRef.current = stream;
+        if (cameraVideoRef.current) {
+          cameraVideoRef.current.srcObject = stream;
+          await cameraVideoRef.current.play().catch(() => undefined);
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Kamera gagal diaktifkan.";
+        setError(message);
+        setCameraOpen(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      stopCameraStream();
+    };
+  }, [cameraOpen, cameraFacingMode]);
+
+  useEffect(() => {
+    if (!isRecording) return;
+
+    const timer = window.setInterval(() => {
+      setRecordingSeconds((prev) => prev + 1);
+    }, 1000);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [isRecording]);
+
   async function logout() {
+    stopVideoRecording();
+    setCameraOpen(false);
     await fetch("/api/petugas/logout", { method: "POST" });
     localStorage.removeItem(SESSION_KEY);
     setSession(null);
@@ -580,6 +799,82 @@ export default function PetugasPage() {
 
                 <article className="panel panel-petugas p-5">
                   <h2 className="text-2xl font-semibold">Upload Dokumentasi</h2>
+                  <div className="mt-4 rounded-xl border border-white/20 bg-white/5 p-3 text-sm">
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setError("");
+                          setSuccess("");
+                          if (!cameraOpen) {
+                            setScanActive(false);
+                          } else if (isRecording) {
+                            stopVideoRecording();
+                          }
+                          setCameraOpen((prev) => !prev);
+                        }}
+                        className="rounded-lg border border-white/30 px-3 py-1.5 font-semibold"
+                      >
+                        {cameraOpen ? "Tutup Kamera Website" : "Buka Kamera Website"}
+                      </button>
+                      {cameraOpen && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setCameraFacingMode((prev) => (prev === "environment" ? "user" : "environment"))
+                          }
+                          className="rounded-lg border border-white/30 px-3 py-1.5 font-semibold"
+                        >
+                          Ganti Kamera
+                        </button>
+                      )}
+                    </div>
+
+                    {cameraOpen && (
+                      <div className="mt-3 space-y-3">
+                        <video
+                          ref={cameraVideoRef}
+                          autoPlay
+                          playsInline
+                          muted
+                          className="aspect-video w-full rounded-lg bg-black object-cover"
+                        />
+                        <canvas ref={cameraCanvasRef} className="hidden" />
+                        <div className="grid gap-2 sm:grid-cols-2">
+                          <button
+                            type="button"
+                            onClick={capturePhotoFromCamera}
+                            disabled={loading || isRecording}
+                            className="rounded-lg bg-[#f0c03d] px-3 py-2 font-semibold text-[#0b2140] disabled:opacity-70"
+                          >
+                            📸 Ambil Foto
+                          </button>
+                          {!isRecording ? (
+                            <button
+                              type="button"
+                              onClick={startVideoRecording}
+                              disabled={loading}
+                              className="rounded-lg border border-white/30 px-3 py-2 font-semibold disabled:opacity-70"
+                            >
+                              ⏺️ Rekam Video
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={stopVideoRecording}
+                              className="rounded-lg border border-[#f0c03d] bg-[#f0c03d]/10 px-3 py-2 font-semibold text-[#f0c03d]"
+                            >
+                              ⏹️ Stop Rekam ({recordingSeconds} dtk)
+                            </button>
+                          )}
+                        </div>
+                        <p className="text-xs text-white/75">
+                          Hasil foto/video kamera otomatis masuk ke file siap upload di bawah.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+
                   <form onSubmit={handleUpload} className="mt-4 grid gap-3 text-sm">
                     <select
                       value={selectedTahap}
@@ -606,17 +901,34 @@ export default function PetugasPage() {
                     </select>
                     <input
                       type="file"
-                      accept="image/*,video/*"
+                      accept={tipeMedia === "foto" ? "image/*" : "video/*"}
+                      capture="environment"
                       onChange={(e) => setFile(e.target.files?.[0] || null)}
                       className="rounded-lg border border-white/25 bg-white/10 px-3 py-2"
                       required
                     />
-                    <button
-                      disabled={loading}
-                      className="rounded-xl bg-[#f0c03d] px-4 py-2 font-semibold text-[#0b2140] disabled:opacity-70"
-                    >
-                      Upload Media
-                    </button>
+                    {file && (
+                      <p className="text-xs text-white/75">
+                        Siap upload: {file.name} ({Math.max(1, Math.round(file.size / 1024))} KB)
+                      </p>
+                    )}
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      <button
+                        type="submit"
+                        disabled={loading}
+                        className="rounded-xl bg-[#f0c03d] px-4 py-2 font-semibold text-[#0b2140] disabled:opacity-70"
+                      >
+                        Upload Media
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => submitUpload(true)}
+                        disabled={loading || !file}
+                        className="rounded-xl border border-white/30 px-4 py-2 font-semibold disabled:opacity-70"
+                      >
+                        Upload + Selesai Tahap
+                      </button>
+                    </div>
                   </form>
 
                   <button

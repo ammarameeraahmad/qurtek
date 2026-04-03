@@ -12,6 +12,20 @@ import {
 
 type GenericRow = Record<string, unknown>;
 
+function pickFirstString(row: GenericRow | null, keys: string[]) {
+  if (!row) return null;
+
+  for (const key of keys) {
+    const value = row[key];
+    if (typeof value !== "string") continue;
+
+    const trimmed = value.trim();
+    if (trimmed) return trimmed;
+  }
+
+  return null;
+}
+
 async function queryRowsByHewanId(
   supabase: ReturnType<typeof getSupabaseServerClient>,
   tableName: string,
@@ -104,6 +118,9 @@ export async function GET(
     const hewanId = String(hewan.id);
 
     let kelompok: { id: string; nama: string } | null = null;
+    let kelompokNamaFallback: string | null =
+      pickFirstString(hewan as GenericRow, ["kelompok_nama", "kelompok", "nama_kelompok", "group_name"]) ??
+      null;
 
     if (kelompokTable) {
       for (const relationColumn of ["hewan_id", "hewan_qurban_id"]) {
@@ -130,6 +147,26 @@ export async function GET(
 
     const hewanKelompokId = typeof hewan.kelompok_id === "string" ? hewan.kelompok_id : null;
 
+    if (!kelompokNamaFallback && shohibulTable && hewanKelompokId) {
+      const { data: shohibulGroupRow, error: shohibulGroupError } = await supabase
+        .from(shohibulTable)
+        .select("*")
+        .eq("kelompok_id", hewanKelompokId)
+        .limit(1)
+        .maybeSingle();
+
+      if (!shohibulGroupError) {
+        kelompokNamaFallback = pickFirstString(shohibulGroupRow as GenericRow, [
+          "kelompok_nama",
+          "kelompok",
+          "nama_kelompok",
+          "group_name",
+        ]);
+      } else if (!isMissingColumnError(shohibulGroupError)) {
+        throw shohibulGroupError;
+      }
+    }
+
     if (!kelompok && hewanKelompokId && kelompokTable) {
       const { data: kelompokById, error: kelompokByIdError } = await supabase
         .from(kelompokTable)
@@ -152,10 +189,7 @@ export async function GET(
     if (!kelompok && hewanKelompokId) {
       kelompok = {
         id: hewanKelompokId,
-        nama:
-          typeof hewan.kelompok_nama === "string"
-            ? hewan.kelompok_nama
-            : `Kelompok ${hewanKelompokId.slice(0, 8)}`,
+        nama: kelompokNamaFallback ?? "Belum ada kelompok",
       };
     }
 

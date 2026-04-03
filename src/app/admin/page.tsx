@@ -19,6 +19,7 @@ type ShohibulRow = {
   no_whatsapp: string;
   jenis_qurban: "sapi" | "kambing";
   tipe: string;
+  kelompok_nama: string | null;
   unique_token: string;
 };
 
@@ -147,7 +148,7 @@ export default function AdminPage() {
       no_whatsapp: item.no_whatsapp,
       jenis_qurban: item.jenis_qurban,
       tipe: item.tipe,
-      kelompok_nama: "",
+      kelompok_nama: item.kelompok_nama ?? "",
     });
     setEditingShohibulId(item.id);
     setSuccess("");
@@ -911,6 +912,7 @@ export default function AdminPage() {
                     <div key={item.id} className="rounded-xl border border-[#eaecf0] p-3">
                       <p className="font-semibold text-[#101828]">{item.nama}</p>
                       <p className="text-xs text-[#475467]">{item.no_whatsapp}</p>
+                      <p className="text-xs text-[#475467]">Kelompok: {item.kelompok_nama || "-"}</p>
                       <p className="mt-2 truncate text-xs text-[#344054]">
                         {origin || "https://qurtek.id"}/d/{item.unique_token}
                       </p>

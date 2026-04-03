@@ -14,6 +14,20 @@ type GenericRow = Record<string, unknown>;
 const TOKEN_REGEX = /^[A-Za-z0-9_-]{6,120}$/;
 const SIGNED_URL_TTL_SECONDS = 60 * 60 * 24;
 
+function pickFirstString(row: GenericRow | null, keys: string[]) {
+  if (!row) return null;
+
+  for (const key of keys) {
+    const value = row[key];
+    if (typeof value !== "string") continue;
+
+    const trimmed = value.trim();
+    if (trimmed) return trimmed;
+  }
+
+  return null;
+}
+
 async function queryRowsByHewanId(
   supabase: ReturnType<typeof getSupabaseServerClient>,
   tableName: string,
@@ -174,7 +188,30 @@ export async function GET(
       }
     }
 
+    if (kelompokTable && !kelompok && hewan?.id) {
+      for (const relationColumn of ["hewan_id", "hewan_qurban_id"]) {
+        const { data: kelompokByHewan, error: kelompokByHewanError } = await supabase
+          .from(kelompokTable)
+          .select("*")
+          .eq(relationColumn, String(hewan.id))
+          .maybeSingle();
+
+        if (!kelompokByHewanError) {
+          kelompok = (kelompokByHewan as GenericRow | null) ?? null;
+          if (kelompok?.id) break;
+          continue;
+        }
+
+        if (isMissingColumnError(kelompokByHewanError)) continue;
+        throw kelompokByHewanError;
+      }
+    }
+
     if (!hewan) {
+      const fallbackKelompokNama =
+        pickFirstString(kelompok, ["nama"]) ??
+        pickFirstString(shohibul, ["kelompok_nama", "kelompok", "nama_kelompok", "group_name", "group"]);
+
       return NextResponse.json({
         data: {
           shohibul: {
@@ -194,9 +231,15 @@ export async function GET(
           kelompok: kelompok
             ? {
                 id: kelompok.id,
-                nama: kelompok.nama ?? "Kelompok",
+                nama: fallbackKelompokNama ?? "Kelompok",
                 hewan_id: kelompok.hewan_id ?? null,
               }
+            : fallbackKelompokNama || kelompokId
+              ? {
+                  id: kelompokId ?? `manual-${shohibul.id}`,
+                  nama: fallbackKelompokNama ?? "Belum ada kelompok",
+                  hewan_id: null,
+                }
             : null,
           hewan: null,
           status_tracking: [],
@@ -326,16 +369,21 @@ export async function GET(
       };
     });
 
+    const fallbackKelompokNama =
+      pickFirstString(kelompok, ["nama"]) ??
+      pickFirstString(shohibul, ["kelompok_nama", "kelompok", "nama_kelompok", "group_name", "group"]) ??
+      pickFirstString(hewan, ["kelompok_nama", "kelompok", "nama_kelompok", "group_name", "group"]);
+
     const normalizedKelompok = kelompok
       ? {
           id: kelompok.id,
-          nama: kelompok.nama ?? "Kelompok",
+          nama: fallbackKelompokNama ?? "Kelompok",
           hewan_id: kelompok.hewan_id ?? hewan.id,
         }
-      : kelompokId
+      : kelompokId || fallbackKelompokNama
         ? {
-            id: kelompokId,
-            nama: `Kelompok ${kelompokId.slice(0, 8)}`,
+            id: kelompokId ?? `manual-${hewan.id}`,
+            nama: fallbackKelompokNama ?? "Belum ada kelompok",
             hewan_id: hewan.id,
           }
         : null;

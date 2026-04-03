@@ -148,7 +148,10 @@ export async function GET(req: NextRequest) {
 
   try {
     const supabase = getSupabaseServerClient();
-    const shohibulTable = await resolveTableName(supabase, "shohibul");
+    const [shohibulTable, kelompokTable] = await Promise.all([
+      resolveTableName(supabase, "shohibul"),
+      resolveTableName(supabase, "kelompok"),
+    ]);
 
     if (!shohibulTable) {
       return NextResponse.json({ data: [] });
@@ -158,6 +161,22 @@ export async function GET(req: NextRequest) {
 
     if (error) throw error;
 
+    const kelompokNameById = new Map<string, string>();
+    if (kelompokTable) {
+      const { data: kelompokRows, error: kelompokError } = await supabase
+        .from(kelompokTable)
+        .select("id,nama");
+
+      if (kelompokError && !isMissingColumnError(kelompokError)) {
+        throw kelompokError;
+      }
+
+      for (const row of kelompokRows ?? []) {
+        if (typeof row.id !== "string") continue;
+        kelompokNameById.set(row.id, String(row.nama ?? ""));
+      }
+    }
+
     const mapped = (data ?? []).map((item) => ({
       id: item.id,
       nama: item.nama ?? "",
@@ -165,6 +184,10 @@ export async function GET(req: NextRequest) {
       jenis_qurban: item.jenis_qurban ?? item.jenis ?? "sapi",
       tipe: item.tipe ?? item.porsi ?? "1/7",
       kelompok_id: item.kelompok_id ?? null,
+      kelompok_nama:
+        item.kelompok_nama ??
+        item.kelompok ??
+        (typeof item.kelompok_id === "string" ? (kelompokNameById.get(item.kelompok_id) ?? "") : ""),
       unique_token: item.unique_token ?? item.link_unik ?? item.token ?? "",
       created_at: item.created_at ?? null,
     }));
@@ -254,6 +277,7 @@ export async function POST(req: NextRequest) {
       jenis_qurban: data.jenis_qurban ?? data.jenis ?? jenisQurban,
       tipe: data.tipe ?? data.porsi ?? tipe,
       kelompok_id: data.kelompok_id ?? kelompokId,
+      kelompok_nama: data.kelompok_nama ?? data.kelompok ?? kelompokNama ?? null,
       unique_token: data.unique_token ?? data.link_unik ?? data.token ?? token,
       created_at: data.created_at ?? null,
     };
@@ -338,6 +362,7 @@ export async function PATCH(req: NextRequest) {
       jenis_qurban: data.jenis_qurban ?? data.jenis ?? jenisQurban,
       tipe: data.tipe ?? data.porsi ?? tipe,
       kelompok_id: data.kelompok_id ?? kelompokId,
+      kelompok_nama: data.kelompok_nama ?? data.kelompok ?? kelompokNama ?? null,
       unique_token: data.unique_token ?? data.link_unik ?? data.token ?? "",
       created_at: data.created_at ?? null,
     };
