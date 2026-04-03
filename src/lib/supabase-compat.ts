@@ -108,7 +108,9 @@ export async function resolveTableName(supabase: SupabaseClient, logicalName: Lo
     }
   }
 
-  resolvedTableCache.set(logicalName, null);
+  // Do not cache null permanently.
+  // A table can be created while a server instance is still warm,
+  // and caching null would keep returning false negatives.
   return null;
 }
 
