@@ -23,6 +23,19 @@ type HewanColumns = {
   createdAt: string | null;
 };
 
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function humanizeKelompokIdIfPossible(raw: string | null) {
+  if (!raw) return null;
+
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  if (UUID_REGEX.test(trimmed)) return null;
+
+  return trimmed;
+}
+
 async function generateKodeHewan() {
   const supabase = getSupabaseServerClient();
   const hewanTable = await resolveTableName(supabase, "hewan");
@@ -160,6 +173,34 @@ async function syncHewanToKelompok(kelompokId: string | null, hewanId: string) {
   }
 }
 
+async function persistHewanKelompokTextFallback(
+  supabase: ReturnType<typeof getSupabaseServerClient>,
+  hewanTable: string,
+  hewanId: string,
+  kelompokNama: string | null,
+  viaKelompokTable: boolean
+) {
+  const normalized = normalizeKelompokName(kelompokNama) || null;
+
+  const textColumns = ["kelompok_nama", "kelompok", "nama_kelompok", "group_name"];
+  for (const column of textColumns) {
+    const { error } = await supabase
+      .from(hewanTable)
+      .update({ [column]: normalized })
+      .eq("id", hewanId);
+
+    if (!error) return;
+    if (isMissingColumnError(error)) continue;
+  }
+
+  if (!viaKelompokTable) {
+    await supabase
+      .from(hewanTable)
+      .update({ kelompok_id: normalized })
+      .eq("id", hewanId);
+  }
+}
+
 function buildHewanPayloadVariants(
   columns: HewanColumns,
   input: {
@@ -291,7 +332,11 @@ function normalizeHewanRow(
         ? row.kelompok_nama
         : typeof row.kelompok === "string"
           ? row.kelompok
-          : fallback.kelompok_nama),
+          : fallback.kelompok_nama) ??
+      humanizeKelompokIdIfPossible(
+        readString(row, columns.kelompokId) ??
+          (typeof row.kelompok_id === "string" ? row.kelompok_id : fallback.kelompok_id)
+      ),
     created_at:
       readString(row, columns.createdAt) ??
       (typeof row.created_at === "string" ? row.created_at : null),
@@ -413,7 +458,8 @@ export async function GET(req: NextRequest) {
         kelompok_nama:
           kelompokNamaFromRow?.trim() ||
           kelompokNameByHewanId.get(id) ||
-          (kelompokId ? kelompokNameById.get(kelompokId) ?? null : null),
+          (kelompokId ? kelompokNameById.get(kelompokId) ?? null : null) ||
+          humanizeKelompokIdIfPossible(kelompokId),
         created_at:
           readString(item, columns.createdAt) ??
           (typeof item.created_at === "string" ? item.created_at : null),
@@ -497,6 +543,14 @@ export async function POST(req: NextRequest) {
     if (viaKelompokTable) {
       await syncHewanToKelompok(kelompokId, String(inserted.id));
     }
+
+    await persistHewanKelompokTextFallback(
+      supabase,
+      hewanTable,
+      String(inserted.id),
+      kelompokNama,
+      viaKelompokTable
+    );
 
     const normalized = normalizeHewanRow(
       inserted,
@@ -595,6 +649,14 @@ export async function PATCH(req: NextRequest) {
     if (viaKelompokTable) {
       await syncHewanToKelompok(kelompokId, String(updated.id));
     }
+
+    await persistHewanKelompokTextFallback(
+      supabase,
+      hewanTable,
+      String(updated.id),
+      kelompokNama,
+      viaKelompokTable
+    );
 
     const normalized = normalizeHewanRow(
       updated,
