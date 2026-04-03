@@ -3,6 +3,7 @@ import { getSupabaseServerClient } from "@/lib/supabase-server";
 import { LABEL_TAHAP, TAHAP_URUTAN } from "@/lib/stages";
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { guessLegacyKelompokNameFromId } from "@/lib/kelompok-compat";
+import { SHOHIBUL_TOKEN_LENGTH } from "@/lib/token";
 import {
   getMissingColumnName,
   getReadableErrorMessage,
@@ -13,10 +14,10 @@ import {
 
 type GenericRow = Record<string, unknown>;
 
-const configuredMin = Number(process.env.PORTAL_TOKEN_MIN_LENGTH ?? "24");
+const configuredMin = Number(process.env.PORTAL_TOKEN_MIN_LENGTH ?? String(SHOHIBUL_TOKEN_LENGTH));
 const TOKEN_MIN_LEN = Number.isFinite(configuredMin)
   ? Math.min(Math.max(configuredMin, 6), 120)
-  : 24;
+  : SHOHIBUL_TOKEN_LENGTH;
 const TOKEN_REGEX = new RegExp(`^[A-Za-z0-9_-]{${TOKEN_MIN_LEN},120}$`);
 const configuredSignedUrlTtl = Number(process.env.SIGNED_URL_TTL_SECONDS ?? "600");
 const SIGNED_URL_TTL_SECONDS = Number.isFinite(configuredSignedUrlTtl)
