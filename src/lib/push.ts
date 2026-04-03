@@ -182,7 +182,8 @@ export async function sendPushToTargets(
             auth: item.auth_key,
           },
         },
-        body
+        body,
+        { TTL: 60 } // TTL wajib, 60 detik (bisa diubah sesuai kebutuhan)
       );
     })
   );
