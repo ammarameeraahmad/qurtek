@@ -1,7 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseServerClient } from "@/lib/supabase-server";
 import { isAdminAuthorized, unauthorizedResponse } from "@/lib/admin-auth";
-import { getReadableErrorMessage, resolveTableName } from "@/lib/supabase-compat";
+import { deriveLegacyKelompokId, normalizeKelompokName } from "@/lib/kelompok-compat";
+import {
+  getReadableErrorMessage,
+  isMissingColumnError,
+  resolveTableName,
+} from "@/lib/supabase-compat";
 
 async function generateKodeHewan() {
   const supabase = getSupabaseServerClient();
@@ -15,15 +20,19 @@ async function generateKodeHewan() {
   return `HWN-${String(next).padStart(3, "0")}`;
 }
 
-async function resolveKelompok(kelompokNama: string | null, hewanId: string) {
-  if (!kelompokNama) return null;
+async function resolveKelompokId(kelompokNama: string | null) {
+  const trimmed = normalizeKelompokName(kelompokNama);
+  if (!trimmed) return { kelompokId: null as string | null, viaKelompokTable: false };
 
   const supabase = getSupabaseServerClient();
   const kelompokTable = await resolveTableName(supabase, "kelompok");
-  if (!kelompokTable) return null;
 
-  const trimmed = kelompokNama.trim();
-  if (!trimmed) return null;
+  if (!kelompokTable) {
+    return {
+      kelompokId: deriveLegacyKelompokId(trimmed),
+      viaKelompokTable: false,
+    };
+  }
 
   const { data: existing } = await supabase
     .from(kelompokTable)
@@ -32,18 +41,32 @@ async function resolveKelompok(kelompokNama: string | null, hewanId: string) {
     .maybeSingle();
 
   if (existing?.id) {
-    await supabase.from(kelompokTable).update({ hewan_id: hewanId }).eq("id", existing.id);
-    return existing.id;
+    return { kelompokId: existing.id, viaKelompokTable: true };
   }
 
   const { data: created, error } = await supabase
     .from(kelompokTable)
-    .insert([{ nama: trimmed, hewan_id: hewanId }])
+    .insert([{ nama: trimmed }])
     .select("id")
     .single();
 
   if (error) throw error;
-  return created.id;
+  return { kelompokId: created.id, viaKelompokTable: true };
+}
+
+async function attachHewanToKelompok(kelompokId: string | null, hewanId: string) {
+  if (!kelompokId) return;
+
+  const supabase = getSupabaseServerClient();
+  const kelompokTable = await resolveTableName(supabase, "kelompok");
+  if (!kelompokTable) return;
+
+  const { error } = await supabase
+    .from(kelompokTable)
+    .update({ hewan_id: hewanId })
+    .eq("id", kelompokId);
+
+  if (error) throw error;
 }
 
 export async function GET(req: NextRequest) {
@@ -63,7 +86,7 @@ export async function GET(req: NextRequest) {
 
     const mapped = (data ?? []).map((item, index) => ({
       id: item.id,
-      kode: item.kode ?? item.kode_hewan ?? item.code ?? `HWN-${String(index + 1).padStart(3, "0")}`,
+      kode: item.kode ?? item.kode_hewan ?? item.code ?? item.qr_code ?? `HWN-${String(index + 1).padStart(3, "0")}`,
       jenis: item.jenis ?? item.jenis_qurban ?? "sapi",
       warna: item.warna ?? item.warna_bulu ?? null,
       berat_est: item.berat_est ?? item.berat ?? item.berat_estimasi ?? null,
@@ -110,27 +133,62 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Jenis hewan harus sapi atau kambing." }, { status: 400 });
     }
 
-    const { data: inserted, error: insertError } = await supabase
-      .from(hewanTable)
-      .insert([
-        {
-          kode,
-          jenis,
-          warna,
-          berat_est: Number.isNaN(beratEst) ? null : beratEst,
-          status: "registered",
-        },
-      ])
-      .select("*")
-      .single();
+    const { kelompokId, viaKelompokTable } = await resolveKelompokId(kelompokNama);
+
+    const payloads: Array<Record<string, unknown>> = [
+      {
+        kode,
+        jenis,
+        warna,
+        berat_est: Number.isNaN(beratEst) ? null : beratEst,
+        status: "registered",
+      },
+      {
+        kode,
+        jenis,
+        status: "registered",
+      },
+      {
+        qr_code: kode,
+        jenis,
+        status: "registered",
+        kelompok_id: kelompokId,
+      },
+      {
+        qr_code: kode,
+        jenis,
+        status: "registered",
+      },
+    ];
+
+    let inserted: Record<string, unknown> | null = null;
+    let insertError: unknown = null;
+
+    for (const payload of payloads) {
+      const result = await supabase.from(hewanTable).insert([payload]).select("*").single();
+
+      if (!result.error) {
+        inserted = result.data;
+        insertError = null;
+        break;
+      }
+
+      insertError = result.error;
+      if (!isMissingColumnError(result.error)) {
+        break;
+      }
+    }
 
     if (insertError) throw insertError;
+    if (!inserted) throw new Error("Insert hewan gagal tanpa data hasil.");
 
-    await resolveKelompok(kelompokNama, inserted.id);
+    if (viaKelompokTable) {
+      await attachHewanToKelompok(kelompokId, String(inserted.id));
+    }
 
     const normalized = {
       id: inserted.id,
-      kode: inserted.kode ?? inserted.kode_hewan ?? inserted.code ?? kode,
+      kode: inserted.kode ?? inserted.kode_hewan ?? inserted.code ?? inserted.qr_code ?? kode,
       jenis: inserted.jenis ?? inserted.jenis_qurban ?? jenis,
       warna: inserted.warna ?? inserted.warna_bulu ?? null,
       berat_est: inserted.berat_est ?? inserted.berat ?? inserted.berat_estimasi ?? null,

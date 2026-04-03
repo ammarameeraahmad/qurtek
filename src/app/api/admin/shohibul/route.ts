@@ -2,17 +2,40 @@ import { NextRequest, NextResponse } from "next/server";
 import { generateShohibulToken } from "@/lib/token";
 import { getSupabaseServerClient } from "@/lib/supabase-server";
 import { isAdminAuthorized, unauthorizedResponse } from "@/lib/admin-auth";
-import { getReadableErrorMessage, resolveTableName } from "@/lib/supabase-compat";
+import { deriveLegacyKelompokId, normalizeKelompokName } from "@/lib/kelompok-compat";
+import {
+  getReadableErrorMessage,
+  isMissingColumnError,
+  resolveTableName,
+} from "@/lib/supabase-compat";
+
+type InsertResult = {
+  data: Record<string, unknown> | null;
+  error: unknown;
+};
+
+async function resolveShohibulTokenColumn(supabase: ReturnType<typeof getSupabaseServerClient>, tableName: string) {
+  const candidates = ["unique_token", "link_unik", "token"];
+
+  for (const column of candidates) {
+    const { error } = await supabase.from(tableName).select(column).limit(1);
+    if (!error) return column;
+    if (isMissingColumnError(error)) continue;
+    return null;
+  }
+
+  return null;
+}
 
 async function resolveKelompokId(kelompokNama?: string | null) {
-  if (!kelompokNama) return null;
+  const trimmed = normalizeKelompokName(kelompokNama);
+  if (!trimmed) return null;
 
   const supabase = getSupabaseServerClient();
   const kelompokTable = await resolveTableName(supabase, "kelompok");
-  if (!kelompokTable) return null;
 
-  const trimmed = kelompokNama.trim();
-  if (!trimmed) return null;
+  // Legacy schema does not have kelompok table, only kelompok_id on shohibul/hewan.
+  if (!kelompokTable) return deriveLegacyKelompokId(trimmed);
 
   const { data: existing } = await supabase
     .from(kelompokTable)
@@ -37,14 +60,18 @@ async function createUniqueToken() {
   const shohibulTable = await resolveTableName(supabase, "shohibul");
   if (!shohibulTable) return generateShohibulToken();
 
+  const tokenColumn = await resolveShohibulTokenColumn(supabase, shohibulTable);
+  if (!tokenColumn) return generateShohibulToken();
+
   for (let i = 0; i < 8; i += 1) {
     const token = generateShohibulToken();
     const { count, error } = await supabase
       .from(shohibulTable)
       .select("id", { count: "exact", head: true })
-      .eq("unique_token", token);
+      .eq(tokenColumn, token);
 
-    if (error) throw error;
+    // If token column probing is not supported in this schema, skip uniqueness guard.
+    if (error) return token;
     if (!count) return token;
   }
 
@@ -73,7 +100,7 @@ export async function GET(req: NextRequest) {
       jenis_qurban: item.jenis_qurban ?? item.jenis ?? "sapi",
       tipe: item.tipe ?? item.porsi ?? "1/7",
       kelompok_id: item.kelompok_id ?? null,
-      unique_token: item.unique_token ?? item.token ?? "",
+      unique_token: item.unique_token ?? item.link_unik ?? item.token ?? "",
       created_at: item.created_at ?? null,
     }));
 
@@ -121,43 +148,59 @@ export async function POST(req: NextRequest) {
     const kelompokId = await resolveKelompokId(kelompokNama);
     const token = await createUniqueToken();
 
-    const primaryInsert = await supabase
-      .from(shohibulTable)
-      .insert([
-        {
-          nama,
-          no_whatsapp: noWhatsapp,
-          jenis_qurban: jenisQurban,
-          tipe,
-          kelompok_id: kelompokId,
-          unique_token: token,
-        },
-      ])
-      .select("*")
-      .single();
+    const payloads: Array<Record<string, unknown>> = [
+      {
+        nama,
+        no_whatsapp: noWhatsapp,
+        jenis_qurban: jenisQurban,
+        tipe,
+        kelompok_id: kelompokId,
+        unique_token: token,
+      },
+      {
+        nama,
+        no_whatsapp: noWhatsapp,
+        kelompok_id: kelompokId,
+        unique_token: token,
+      },
+      {
+        nama,
+        whatsapp: noWhatsapp,
+        kelompok_id: kelompokId,
+        link_unik: token,
+      },
+      {
+        nama,
+        whatsapp: noWhatsapp,
+        kelompok_id: kelompokId,
+        token,
+      },
+    ];
 
-    let data = primaryInsert.data;
-    let error = primaryInsert.error;
+    let data: Record<string, unknown> | null = null;
+    let error: unknown = null;
 
-    // Legacy schema fallback
-    if (error) {
-      const legacyInsert = await supabase
+    for (const payload of payloads) {
+      const result: InsertResult = await supabase
         .from(shohibulTable)
-        .insert([
-          {
-            nama,
-            whatsapp: noWhatsapp,
-            kelompok_id: kelompokId,
-          },
-        ])
+        .insert([payload])
         .select("*")
         .single();
 
-      data = legacyInsert.data;
-      error = legacyInsert.error;
+      if (!result.error) {
+        data = result.data;
+        error = null;
+        break;
+      }
+
+      error = result.error;
+      if (!isMissingColumnError(result.error)) {
+        break;
+      }
     }
 
     if (error) throw error;
+    if (!data) throw new Error("Insert shohibul gagal tanpa data hasil.");
 
     const normalized = {
       id: data.id,
@@ -166,7 +209,7 @@ export async function POST(req: NextRequest) {
       jenis_qurban: data.jenis_qurban ?? data.jenis ?? jenisQurban,
       tipe: data.tipe ?? data.porsi ?? tipe,
       kelompok_id: data.kelompok_id ?? kelompokId,
-      unique_token: data.unique_token ?? data.token ?? token,
+      unique_token: data.unique_token ?? data.link_unik ?? data.token ?? token,
       created_at: data.created_at ?? null,
     };
 

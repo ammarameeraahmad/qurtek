@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseServerClient } from "@/lib/supabase-server";
 import { isAdminAuthorized, unauthorizedResponse } from "@/lib/admin-auth";
+import { readPetugasLocalStore } from "@/lib/petugas-store";
 import {
   getReadableErrorMessage,
   isMissingTableError,
@@ -20,6 +21,8 @@ export async function GET(req: NextRequest) {
       resolveTableName(supabase, "push_subscriptions"),
       resolveTableName(supabase, "petugas"),
     ]);
+
+    const localPetugas = petugasTable ? null : await readPetugasLocalStore();
 
     const [hewanResult, shohibulResult, dokumentasiResult, pushResult, petugasResult] = await Promise.all([
       hewanTable ? supabase.from(hewanTable).select("*") : Promise.resolve({ data: [], error: null }),
@@ -54,7 +57,9 @@ export async function GET(req: NextRequest) {
     const sapi = hewanData.filter((item) => item.jenis === "sapi").length;
     const kambing = hewanData.filter((item) => item.jenis === "kambing").length;
     const pushSubscribed = (pushResult.data ?? []).filter((item) => item.is_active !== false).length;
-    const petugasOnline = (petugasResult.data ?? []).filter((item) => item.is_active !== false).length;
+    const petugasOnline = localPetugas
+      ? localPetugas.filter((item) => item.is_active !== false).length
+      : (petugasResult.data ?? []).filter((item) => item.is_active !== false).length;
 
     const metrics = {
       sapi,
@@ -70,7 +75,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       metrics,
       hewan: hewanData,
-      petugas: petugasResult.data ?? [],
+      petugas: localPetugas ?? (petugasResult.data ?? []),
     });
   } catch (error) {
     return NextResponse.json(

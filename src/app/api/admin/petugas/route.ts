@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseServerClient } from "@/lib/supabase-server";
 import { isAdminAuthorized, unauthorizedResponse } from "@/lib/admin-auth";
+import { addPetugasToLocalStore, readPetugasLocalStore } from "@/lib/petugas-store";
 import { getReadableErrorMessage, isMissingTableError, resolveTableName } from "@/lib/supabase-compat";
+
+const PIN_REGEX = /^\d{6}$/;
 
 export async function GET(req: NextRequest) {
   if (!isAdminAuthorized(req)) return unauthorizedResponse();
@@ -11,7 +14,9 @@ export async function GET(req: NextRequest) {
     const petugasTable = await resolveTableName(supabase, "petugas");
 
     if (!petugasTable) {
-      return NextResponse.json({ data: [] });
+      const localRows = await readPetugasLocalStore();
+      localRows.sort((a, b) => a.nama.localeCompare(b.nama));
+      return NextResponse.json({ data: localRows });
     }
 
     const { data, error } = await supabase
@@ -19,7 +24,9 @@ export async function GET(req: NextRequest) {
       .select("*");
 
     if (error && isMissingTableError(error)) {
-      return NextResponse.json({ data: [] });
+      const localRows = await readPetugasLocalStore();
+      localRows.sort((a, b) => a.nama.localeCompare(b.nama));
+      return NextResponse.json({ data: localRows });
     }
 
     if (error) throw error;
@@ -50,12 +57,6 @@ export async function POST(req: NextRequest) {
   try {
     const supabase = getSupabaseServerClient();
     const petugasTable = await resolveTableName(supabase, "petugas");
-    if (!petugasTable) {
-      return NextResponse.json(
-        { error: "Tabel petugas belum tersedia di Supabase. Jalankan schema terbaru." },
-        { status: 503 }
-      );
-    }
 
     const body = await req.json();
 
@@ -64,11 +65,22 @@ export async function POST(req: NextRequest) {
     const area = body.area ? String(body.area).trim() : null;
     const pin = String(body.pin ?? "").trim();
 
-    if (!nama || !pin || pin.length !== 6) {
+    if (!nama || !PIN_REGEX.test(pin)) {
       return NextResponse.json(
         { error: "Nama dan PIN 6 digit wajib diisi." },
         { status: 400 }
       );
+    }
+
+    if (!petugasTable) {
+      const data = await addPetugasToLocalStore({
+        nama,
+        no_hp: noHp,
+        area,
+        pin,
+      });
+
+      return NextResponse.json({ data }, { status: 201 });
     }
 
     const { data, error } = await supabase

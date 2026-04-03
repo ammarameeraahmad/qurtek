@@ -35,6 +35,21 @@ export function isMissingTableError(error: unknown) {
   return code === "PGRST205" || code === "42P01";
 }
 
+export function isMissingColumnError(error: unknown) {
+  const code = getErrorCode(error);
+  if (code === "PGRST204" || code === "42703") return true;
+
+  if (error && typeof error === "object") {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === "string") {
+      const lower = message.toLowerCase();
+      return lower.includes("could not find the") && lower.includes("column");
+    }
+  }
+
+  return false;
+}
+
 export function getReadableErrorMessage(error: unknown, fallback: string) {
   if (error instanceof Error && error.message) return error.message;
 
