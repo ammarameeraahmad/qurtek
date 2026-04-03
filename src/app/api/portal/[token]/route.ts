@@ -564,12 +564,13 @@ export async function GET(
 
     const timeline = TAHAP_URUTAN.map((tahap) => {
       const status = statusByTahap.get(tahap);
+      const mediaCount = mediaCountByTahap.get(tahap) ?? 0;
       return {
         tahap,
         label: LABEL_TAHAP[tahap],
-        status: status ? "done" : "pending",
+        status: status || mediaCount > 0 ? "done" : "pending",
         waktu: status?.waktu ?? null,
-        media: mediaCountByTahap.get(tahap) ?? 0,
+        media: mediaCount,
       };
     });
 

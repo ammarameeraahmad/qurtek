@@ -274,14 +274,15 @@ export default function PetugasPage() {
     }
   }
 
-  async function loadHewanByKode() {
-    if (!kodeInput.trim()) return;
+  async function loadHewanByKode(inputOverride?: string) {
+    const rawInput = typeof inputOverride === "string" ? inputOverride : kodeInput;
+    if (!rawInput.trim()) return;
     setLoading(true);
     setError("");
     setSuccess("");
 
     try {
-      const code = extractKode(kodeInput);
+      const code = extractKode(rawInput);
       const res = await fetch(`/api/petugas/hewan/${encodeURIComponent(code)}`, { cache: "no-store" });
       const json = await res.json();
       if (res.status === 401) {
@@ -607,12 +608,6 @@ export default function PetugasPage() {
   }, []);
 
   useEffect(() => {
-    if (session && kodeInput && !hewanDetail) {
-      loadHewanByKode();
-    }
-  }, [session, kodeInput]);
-
-  useEffect(() => {
     if (session) {
       flushOfflineQueue();
     }
@@ -635,8 +630,10 @@ export default function PetugasPage() {
           { facingMode: "environment" },
           { fps: 10, qrbox: { width: 260, height: 260 } },
           (decodedText: string) => {
-            setKodeInput(extractKode(decodedText));
+            const scannedCode = extractKode(decodedText);
+            setKodeInput(scannedCode);
             setScanActive(false);
+            void loadHewanByKode(scannedCode);
           },
           () => {
             // No-op for scan failure callback.

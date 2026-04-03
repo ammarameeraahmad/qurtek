@@ -157,40 +157,44 @@ export async function POST(
 
         if (!inserted && insertError) throw insertError;
       }
-    } else {
-      const inlineSubscription = {
-        endpoint,
-        keys: {
-          p256dh,
-          auth,
-        },
-      };
+    }
 
-      const payloads = [
-        { push_subscription: inlineSubscription },
-        { subscription: inlineSubscription },
-      ];
+    // Always mirror subscription into shohibul row when compatible columns exist.
+    // This acts as fallback if push_subscriptions cannot be read due policy/schema mismatch.
+    const inlineSubscription = {
+      endpoint,
+      keys: {
+        p256dh,
+        auth,
+      },
+    };
 
-      let updated = false;
-      let updateError: unknown = null;
+    const inlinePayloads = [
+      { push_subscription: inlineSubscription },
+      { subscription: inlineSubscription },
+    ];
 
-      for (const payload of payloads) {
-        const result = await supabase
-          .from(shohibulTable)
-          .update(payload)
-          .eq("id", shohibul.id);
+    let inlineUpdated = false;
+    let inlineUpdateError: unknown = null;
 
-        if (!result.error) {
-          updated = true;
-          updateError = null;
-          break;
-        }
+    for (const payload of inlinePayloads) {
+      const result = await supabase
+        .from(shohibulTable)
+        .update(payload)
+        .eq("id", shohibul.id);
 
-        updateError = result.error;
-        if (!isMissingColumnError(result.error)) break;
+      if (!result.error) {
+        inlineUpdated = true;
+        inlineUpdateError = null;
+        break;
       }
 
-      if (!updated && updateError) throw updateError;
+      inlineUpdateError = result.error;
+      if (!isMissingColumnError(result.error)) break;
+    }
+
+    if (!inlineUpdated && inlineUpdateError && !isMissingColumnError(inlineUpdateError)) {
+      throw inlineUpdateError;
     }
 
     return NextResponse.json({ ok: true });

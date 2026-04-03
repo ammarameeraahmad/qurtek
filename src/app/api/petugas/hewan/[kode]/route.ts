@@ -596,7 +596,8 @@ export async function GET(
         dokumentasi,
         checklist: TAHAP_URUTAN.map((tahap) => ({
           tahap,
-          selesai: tahapSelesai.has(tahap),
+          // Fallback: treat stage as done when media exists even if status rows are not readable.
+          selesai: tahapSelesai.has(tahap) || (mediaCountByTahap[tahap] ?? 0) > 0,
           media: mediaCountByTahap[tahap] ?? 0,
         })),
       },
