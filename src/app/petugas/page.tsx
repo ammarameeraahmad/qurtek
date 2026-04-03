@@ -424,9 +424,19 @@ export default function PetugasPage() {
     setSuccess("");
 
     try {
-      await postTahapDone(hewanDetail.hewan.id, selectedTahap);
+      const result = await postTahapDone(hewanDetail.hewan.id, selectedTahap);
       await loadHewanByKode();
-      setSuccess(`Tahap ${LABEL_TAHAP[selectedTahap as keyof typeof LABEL_TAHAP]} selesai.`);
+
+      let successMsg = `Tahap ${LABEL_TAHAP[selectedTahap as keyof typeof LABEL_TAHAP]} selesai.`;
+      if (result.pushResult && result.pushResult.sent > 0) {
+        successMsg += ` Notifikasi terkirim ke ${result.pushResult.sent} shohibul.`;
+      } else if (result.pushResult && result.pushResult.skipped > 0) {
+        successMsg += ` (Notifikasi belum aktif untuk ${result.pushResult.skipped} shohibul).`;
+      } else if (result.pushResult && result.pushResult.sent === 0) {
+        successMsg += " Notifikasi belum terkirim (target/subscription belum ditemukan).";
+      }
+
+      setSuccess(successMsg);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Gagal update status.");
     } finally {

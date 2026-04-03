@@ -392,7 +392,7 @@ export async function GET(
       ? await queryRowsByHewanId(
           supabase,
           statusTable,
-          "id,tahap,waktu,catatan,petugas_id,petugas_qurban_id,created_at",
+          "id,tahap,tipe_tahapan,stage,status_tahap,waktu,catatan,petugas_id,petugas_qurban_id,created_at",
           hewanId,
           hewanCode
         )
@@ -535,8 +535,20 @@ export async function GET(
 
     const tahapSelesai = new Set(
       trackingRows
-        .map((item) => (typeof item.tahap === "string" ? item.tahap : ""))
-        .filter((value) => value.length > 0)
+        .map((item) => {
+          const tahapRaw =
+            typeof item.tahap === "string"
+              ? item.tahap
+              : typeof item.tipe_tahapan === "string"
+                ? item.tipe_tahapan
+                : typeof item.stage === "string"
+                  ? item.stage
+                  : typeof item.status_tahap === "string"
+                    ? item.status_tahap
+                    : "";
+          return normalizeTahap(tahapRaw);
+        })
+        .filter((value) => (TAHAP_URUTAN as readonly string[]).includes(value))
     );
 
     const mediaCountByTahap: Record<string, number> = {};

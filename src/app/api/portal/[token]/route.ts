@@ -396,7 +396,7 @@ export async function GET(
         ? queryRowsByHewanRef(
             supabase,
             statusTable,
-            "id,tahap,waktu,catatan,created_at",
+            "id,tahap,tipe_tahapan,stage,status_tahap,waktu,catatan,created_at",
             hewanId,
             hewanCode
           )
@@ -416,7 +416,17 @@ export async function GET(
     const statusTracking = statusRows
       .map((item, index) => ({
         id: typeof item.id === "string" ? item.id : `status-${index}`,
-        tahap: typeof item.tahap === "string" ? item.tahap : "",
+        tahap: normalizeTahap(
+          typeof item.tahap === "string"
+            ? item.tahap
+            : typeof item.tipe_tahapan === "string"
+              ? item.tipe_tahapan
+              : typeof item.stage === "string"
+                ? item.stage
+                : typeof item.status_tahap === "string"
+                  ? item.status_tahap
+                  : ""
+        ),
         waktu:
           typeof item.waktu === "string"
             ? item.waktu
@@ -425,7 +435,7 @@ export async function GET(
               : null,
         catatan: typeof item.catatan === "string" ? item.catatan : null,
       }))
-      .filter((item) => item.tahap)
+      .filter((item) => (TAHAP_URUTAN as readonly string[]).includes(item.tahap))
       .sort((a, b) => {
         const aTs = Date.parse(a.waktu ?? "") || 0;
         const bTs = Date.parse(b.waktu ?? "") || 0;

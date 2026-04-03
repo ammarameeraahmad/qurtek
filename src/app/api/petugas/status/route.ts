@@ -13,6 +13,33 @@ import {
 
 type GenericRow = Record<string, unknown>;
 
+function normalizeTahapKey(input: string) {
+  return input
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .replace(/_+/g, "_");
+}
+
+function normalizeTahap(tahap: string): string {
+  if (!tahap) return tahap;
+
+  const normalized = normalizeTahapKey(tahap);
+  const found = (TAHAP_URUTAN as readonly string[]).find(
+    (item) => normalizeTahapKey(item) === normalized
+  );
+  if (found) return found;
+
+  const aliasMap: Record<string, string> = {
+    disembelih: "penyembelihan",
+    siap_diambil: "distribusi",
+    siap_ambil: "distribusi",
+  };
+
+  return aliasMap[normalized] ?? normalized;
+}
+
 function buildStatusMessage(tahap: string, kode: string) {
   if (tahap === "hewan_tiba") return `Hewan qurban Anda (${kode}) sudah siap di area penyembelihan.`;
   if (tahap === "penyembelihan") return `Alhamdulillah! Hewan qurban Anda (${kode}) telah disembelih.`;
@@ -137,7 +164,8 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     const hewanId = String(body.hewanId ?? "").trim();
-    const tahap = String(body.tahap ?? "").trim();
+    const tahapInput = String(body.tahap ?? "").trim();
+    const tahap = normalizeTahap(tahapInput);
     const catatan = body.catatan ? String(body.catatan).trim() : null;
 
     if (!hewanId || !tahap) {
@@ -158,6 +186,10 @@ export async function POST(req: NextRequest) {
 
     if (!hewanTable) {
       return NextResponse.json({ error: "Tabel hewan belum tersedia." }, { status: 503 });
+    }
+
+    if (!statusTable) {
+      return NextResponse.json({ error: "Tabel status tracking belum tersedia." }, { status: 503 });
     }
 
     const { data: hewan, error: hewanError } = await supabase
@@ -194,50 +226,48 @@ export async function POST(req: NextRequest) {
 
     let trackingRow: GenericRow | null = null;
 
-    if (statusTable) {
-      const payloads: Array<Record<string, unknown>> = [
-        {
-          hewan_id: hewanId,
-          tahap,
-          catatan,
-          petugas_id: petugasSession.id,
-        },
-        {
-          hewan_qurban_id: hewanId,
-          tahap,
-          catatan,
-          petugas_qurban_id: petugasSession.id,
-        },
-        {
-          hewan_id: hewanId,
-          tahap,
-          catatan,
-        },
-      ];
+    const payloads: Array<Record<string, unknown>> = [
+      {
+        hewan_id: hewanId,
+        tahap,
+        catatan,
+        petugas_id: petugasSession.id,
+      },
+      {
+        hewan_qurban_id: hewanId,
+        tahap,
+        catatan,
+        petugas_qurban_id: petugasSession.id,
+      },
+      {
+        hewan_id: hewanId,
+        tahap,
+        catatan,
+      },
+    ];
 
-      let trackingError: unknown = null;
+    let trackingError: unknown = null;
 
-      for (const payload of payloads) {
-        const result = await supabase
-          .from(statusTable)
-          .insert([payload])
-          .select("*")
-          .single();
+    for (const payload of payloads) {
+      const result = await supabase
+        .from(statusTable)
+        .insert([payload])
+        .select("*")
+        .single();
 
-        if (!result.error) {
-          trackingRow = result.data;
-          trackingError = null;
-          break;
-        }
-
-        trackingError = result.error;
-        if (!isMissingColumnError(result.error)) {
-          break;
-        }
+      if (!result.error) {
+        trackingRow = result.data;
+        trackingError = null;
+        break;
       }
 
-      if (trackingError) throw trackingError;
+      trackingError = result.error;
+      if (!isMissingColumnError(result.error)) {
+        break;
+      }
     }
+
+    if (trackingError) throw trackingError;
 
     const updateResult = await supabase
       .from(hewanTable)
@@ -258,8 +288,9 @@ export async function POST(req: NextRequest) {
       req.nextUrl.origin
     );
 
+    let pushResult = { sent: 0, skipped: 0 };
     if (targets.length > 0) {
-      await sendPushToTargets(targets, {
+      pushResult = await sendPushToTargets(targets, {
         title: "Qurtek",
         message: buildStatusMessage(tahap, kode),
       });
@@ -276,7 +307,7 @@ export async function POST(req: NextRequest) {
       petugas_id: trackingRow?.petugas_id ?? trackingRow?.petugas_qurban_id ?? petugasSession.id,
     };
 
-    return NextResponse.json({ data: normalized });
+    return NextResponse.json({ data: normalized, pushResult });
   } catch (error) {
     return NextResponse.json(
       { error: getReadableErrorMessage(error, "Gagal update status.") },
