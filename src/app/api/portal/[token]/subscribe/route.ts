@@ -14,8 +14,6 @@ const TOKEN_MIN_LEN = Number.isFinite(configuredMin)
   ? Math.min(Math.max(configuredMin, 6), 120)
   : SHOHIBUL_TOKEN_LENGTH;
 const TOKEN_REGEX = new RegExp(`^[A-Za-z0-9_-]{${TOKEN_MIN_LEN},120}$`);
-const ALLOW_INLINE_PUSH_SUBSCRIPTION_FALLBACK =
-  process.env.ALLOW_INLINE_PUSH_SUBSCRIPTION_FALLBACK === "true";
 
 function isValidEndpoint(endpoint: string) {
   try {
@@ -91,119 +89,46 @@ export async function POST(
 
     const pushTable = await resolveTableName(supabase, "push_subscriptions");
 
-    if (pushTable) {
-      const { data: existing, error: existingError } = await supabase
-        .from(pushTable)
-        .select("id")
-        .eq("endpoint", endpoint)
-        .eq("shohibul_id", shohibul.id)
-        .maybeSingle();
-
-      if (existingError && !isMissingColumnError(existingError)) {
-        throw existingError;
-      }
-
-      if (existing?.id) {
-        const updatePayloads = [
-          { p256dh_key: p256dh, auth_key: auth, is_active: true },
-          { p256dh: p256dh, auth: auth, is_active: true },
-        ];
-
-        let updated = false;
-        let updateError: unknown = null;
-
-        for (const payload of updatePayloads) {
-          const result = await supabase
-            .from(pushTable)
-            .update(payload)
-            .eq("id", existing.id);
-
-          if (!result.error) {
-            updated = true;
-            updateError = null;
-            break;
-          }
-
-          updateError = result.error;
-          if (!isMissingColumnError(result.error)) break;
-        }
-
-        if (!updated && updateError) throw updateError;
-      } else {
-        const insertPayloads = [
-          {
-            shohibul_id: shohibul.id,
-            endpoint,
-            p256dh_key: p256dh,
-            auth_key: auth,
-            is_active: true,
-          },
-          {
-            shohibul_id: shohibul.id,
-            endpoint,
-            p256dh,
-            auth,
-            is_active: true,
-          },
-        ];
-
-        let inserted = false;
-        let insertError: unknown = null;
-
-        for (const payload of insertPayloads) {
-          const result = await supabase.from(pushTable).insert([payload]);
-          if (!result.error) {
-            inserted = true;
-            insertError = null;
-            break;
-          }
-
-          insertError = result.error;
-          if (!isMissingColumnError(result.error)) break;
-        }
-
-        if (!inserted && insertError) throw insertError;
-      }
+    if (!pushTable) {
+      return NextResponse.json({ error: "Tabel push_subscriptions belum tersedia." }, { status: 503 });
     }
 
-    if (ALLOW_INLINE_PUSH_SUBSCRIPTION_FALLBACK) {
-      // Optional mirror for legacy deployments. Keep disabled by default.
-      const inlineSubscription = {
+    const upsertPayloads = [
+      {
+        shohibul_id: shohibul.id,
         endpoint,
-        keys: {
-          p256dh,
-          auth,
-        },
-      };
+        p256dh_key: p256dh,
+        auth_key: auth,
+        is_active: true,
+      },
+      {
+        shohibul_id: shohibul.id,
+        endpoint,
+        p256dh,
+        auth,
+        is_active: true,
+      },
+    ];
 
-      const inlinePayloads = [
-        { push_subscription: inlineSubscription },
-        { subscription: inlineSubscription },
-      ];
+    let upserted = false;
+    let upsertError: unknown = null;
 
-      let inlineUpdated = false;
-      let inlineUpdateError: unknown = null;
+    for (const payload of upsertPayloads) {
+      const result = await supabase
+        .from(pushTable)
+        .upsert(payload, { onConflict: "endpoint" });
 
-      for (const payload of inlinePayloads) {
-        const result = await supabase
-          .from(shohibulTable)
-          .update(payload)
-          .eq("id", shohibul.id);
-
-        if (!result.error) {
-          inlineUpdated = true;
-          inlineUpdateError = null;
-          break;
-        }
-
-        inlineUpdateError = result.error;
-        if (!isMissingColumnError(result.error)) break;
+      if (!result.error) {
+        upserted = true;
+        upsertError = null;
+        break;
       }
 
-      if (!inlineUpdated && inlineUpdateError && !isMissingColumnError(inlineUpdateError)) {
-        throw inlineUpdateError;
-      }
+      upsertError = result.error;
+      if (!isMissingColumnError(result.error)) break;
     }
+
+    if (!upserted && upsertError) throw upsertError;
 
     return NextResponse.json({ ok: true });
   } catch (error) {

@@ -10,9 +10,6 @@ type NormalizedSubscription = {
   auth_key: string;
 };
 
-const ALLOW_INLINE_PUSH_SUBSCRIPTION_FALLBACK =
-  process.env.ALLOW_INLINE_PUSH_SUBSCRIPTION_FALLBACK === "true";
-
 let isConfigured = false;
 
 function configureWebPush() {
@@ -30,86 +27,63 @@ function configureWebPush() {
   isConfigured = true;
 }
 
-function normalizeInlineSubscription(raw: unknown, shohibulId: string): NormalizedSubscription | null {
-  let value = raw;
-
-  if (typeof value === "string") {
-    try {
-      value = JSON.parse(value);
-    } catch {
-      return null;
-    }
-  }
-
-  if (!value || typeof value !== "object") return null;
-
-  const objectValue = value as Record<string, unknown>;
-  const keysValue =
-    objectValue.keys && typeof objectValue.keys === "object"
-      ? (objectValue.keys as Record<string, unknown>)
-      : {};
-
-  const endpoint = typeof objectValue.endpoint === "string" ? objectValue.endpoint : "";
-  const p256dh =
-    typeof keysValue.p256dh === "string"
-      ? keysValue.p256dh
-      : typeof objectValue.p256dh_key === "string"
-        ? objectValue.p256dh_key
-        : "";
-  const auth =
-    typeof keysValue.auth === "string"
-      ? keysValue.auth
-      : typeof objectValue.auth_key === "string"
-        ? objectValue.auth_key
-        : "";
-
-  if (!endpoint || !p256dh || !auth) return null;
-
-  return {
-    shohibul_id: shohibulId,
-    endpoint,
-    p256dh_key: p256dh,
-    auth_key: auth,
-  };
-}
-
-async function loadSubscriptionsFromShohibul(
+async function loadSubscriptionsFromPushTable(
   supabase: ReturnType<typeof getSupabaseServerClient>,
-  shohibulIds: string[]
+  pushTable: string,
+  targetIds: string[]
 ) {
-  const shohibulTable = await resolveTableName(supabase, "shohibul");
-  if (!shohibulTable || shohibulIds.length === 0) return [] as NormalizedSubscription[];
-
   const selectCandidates = [
-    "id,push_subscription,subscription",
-    "id,push_subscription",
-    "id,subscription",
+    "id, shohibul_id, endpoint, p256dh_key, auth_key",
+    "id, shohibul_id, endpoint, p256dh, auth",
   ];
 
   for (const selectClause of selectCandidates) {
     const { data, error } = await supabase
-      .from(shohibulTable)
+      .from(pushTable)
       .select(selectClause)
-      .in("id", shohibulIds);
+      .in("shohibul_id", targetIds)
+      .eq("is_active", true);
 
     if (error) {
       if (isMissingColumnError(error)) continue;
-      return [];
+      return [] as NormalizedSubscription[];
     }
 
-    const rows = (data ?? []) as unknown as Array<Record<string, unknown>>;
+    const rows = (data ?? []) as Array<Record<string, unknown>>;
+    const normalized: NormalizedSubscription[] = [];
 
-    return rows.flatMap((row) => {
-      if (typeof row.id !== "string") return [];
+    for (const item of rows) {
+      const shohibulId =
+        typeof item.shohibul_id === "string" ? item.shohibul_id.trim() : "";
+      const endpoint =
+        typeof item.endpoint === "string" ? item.endpoint.trim() : "";
+      const p256dhKey =
+        typeof item.p256dh_key === "string"
+          ? item.p256dh_key.trim()
+          : typeof item.p256dh === "string"
+            ? item.p256dh.trim()
+            : "";
+      const authKey =
+        typeof item.auth_key === "string"
+          ? item.auth_key.trim()
+          : typeof item.auth === "string"
+            ? item.auth.trim()
+            : "";
 
-      const fromPushSubscription = normalizeInlineSubscription(row.push_subscription, row.id);
-      if (fromPushSubscription) return [fromPushSubscription];
+      if (!shohibulId || !endpoint || !p256dhKey || !authKey) {
+        continue;
+      }
 
-      const fromSubscription = normalizeInlineSubscription(row.subscription, row.id);
-      if (fromSubscription) return [fromSubscription];
+      normalized.push({
+        id: typeof item.id === "string" ? item.id : undefined,
+        shohibul_id: shohibulId,
+        endpoint,
+        p256dh_key: p256dhKey,
+        auth_key: authKey,
+      });
+    }
 
-      return [];
-    });
+    return normalized;
   }
 
   return [] as NormalizedSubscription[];
@@ -133,36 +107,11 @@ export async function sendPushToTargets(
 
   const supabase = getSupabaseServerClient();
   const pushTable = await resolveTableName(supabase, "push_subscriptions");
-  let subscriptions: NormalizedSubscription[] = [];
-
-  if (pushTable) {
-    const { data, error } = await supabase
-      .from(pushTable)
-      .select("id, shohibul_id, endpoint, p256dh_key, auth_key")
-      .in("shohibul_id", targetIds)
-      .eq("is_active", true);
-
-    if (!error && data?.length) {
-      subscriptions = (data ?? [])
-        .filter((item) =>
-          typeof item.shohibul_id === "string" &&
-          typeof item.endpoint === "string" &&
-          typeof item.p256dh_key === "string" &&
-          typeof item.auth_key === "string"
-        )
-        .map((item) => ({
-          id: typeof item.id === "string" ? item.id : undefined,
-          shohibul_id: item.shohibul_id,
-          endpoint: item.endpoint,
-          p256dh_key: item.p256dh_key,
-          auth_key: item.auth_key,
-        }));
-    }
+  if (!pushTable) {
+    return { sent: 0, skipped: targets.length };
   }
 
-  if (!subscriptions.length && ALLOW_INLINE_PUSH_SUBSCRIPTION_FALLBACK) {
-    subscriptions = await loadSubscriptionsFromShohibul(supabase, targetIds);
-  }
+  const subscriptions = await loadSubscriptionsFromPushTable(supabase, pushTable, targetIds);
 
   if (!subscriptions.length) {
     return { sent: 0, skipped: targets.length };

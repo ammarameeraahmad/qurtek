@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+/* eslint-disable @typescript-eslint/no-require-imports */
 const fs = require("fs");
 const path = require("path");
 const { createClient } = require("@supabase/supabase-js");
@@ -18,7 +19,7 @@ function loadEnvFile(envPath) {
       }
       if (!process.env[key]) process.env[key] = val;
     }
-  } catch (e) {
+  } catch {
     // ignore missing file
   }
 }
@@ -49,7 +50,7 @@ function isMissingTableError(err) {
 
 async function checkTable(name) {
   try {
-    const { data, error } = await supabase.from(name).select("id").limit(1);
+    const { error } = await supabase.from(name).select("id").limit(1);
     if (error) {
       if (isMissingTableError(error)) {
         console.log(`MISSING:${name}`);
@@ -75,7 +76,6 @@ async function checkTable(name) {
   const tables = ["push_subscriptions", "distribusi"];
   const results = {};
   for (const t of tables) {
-    // eslint-disable-next-line no-await-in-loop
     results[t] = await checkTable(t);
   }
 

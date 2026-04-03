@@ -283,6 +283,28 @@ BEGIN
 			WHERE COALESCE(BTRIM(auth_key), '') = ''
 		$sql$;
 	END IF;
+
+	-- dedupe endpoint so unique index creation can succeed
+	IF EXISTS (
+		SELECT 1 FROM information_schema.columns
+		WHERE table_schema='public' AND table_name='push_subscriptions' AND column_name='endpoint'
+	) THEN
+		EXECUTE $sql$
+			WITH ranked AS (
+				SELECT
+					id,
+					ROW_NUMBER() OVER (
+						PARTITION BY endpoint
+						ORDER BY subscribed_at DESC NULLS LAST, id DESC
+					) AS rn
+				FROM public.push_subscriptions
+				WHERE endpoint IS NOT NULL AND BTRIM(endpoint) <> ''
+			)
+			DELETE FROM public.push_subscriptions ps
+			USING ranked r
+			WHERE ps.id = r.id AND r.rn > 1
+		$sql$;
+	END IF;
 END $$;
 
 -- Indexes (guarded by column existence)
@@ -337,6 +359,15 @@ DO $$ BEGIN
 		WHERE table_schema='public' AND table_name='push_subscriptions' AND column_name='shohibul_id'
 	) THEN
 		EXECUTE 'create index if not exists idx_push_shohibul on public.push_subscriptions(shohibul_id)';
+	END IF;
+END $$;
+
+DO $$ BEGIN
+	IF EXISTS (
+		SELECT 1 FROM information_schema.columns
+		WHERE table_schema='public' AND table_name='push_subscriptions' AND column_name='endpoint'
+	) THEN
+		EXECUTE 'create unique index if not exists idx_push_endpoint_unique on public.push_subscriptions(endpoint)';
 	END IF;
 END $$;
 

@@ -124,6 +124,7 @@ create index if not exists idx_hewan_kode on hewan(kode);
 create index if not exists idx_dokumentasi_hewan on dokumentasi(hewan_id);
 create index if not exists idx_status_tracking_hewan on status_tracking(hewan_id);
 create index if not exists idx_push_shohibul on push_subscriptions(shohibul_id);
+create unique index if not exists idx_push_endpoint_unique on push_subscriptions(endpoint);
 
 -- RLS setup (API routes menggunakan service role key)
 alter table hewan enable row level security;
