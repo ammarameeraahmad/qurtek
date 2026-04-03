@@ -21,6 +21,13 @@ type HewanDetail = {
   kelompok: { id: string; nama: string } | null;
   shohibul: Array<{ id: string; nama: string }>;
   checklist: Array<{ tahap: string; selesai: boolean; media: number }>;
+  dokumentasi: Array<{
+    id: string;
+    tahap: string;
+    tipe_media: "foto" | "video";
+    media_public_url: string;
+    uploaded_at: string | null;
+  }>;
 };
 
 type QueueItem = {
@@ -831,6 +838,39 @@ export default function PetugasPage() {
                         <span className="rounded-full bg-white/20 px-2 py-0.5 text-xs">📸 {item.media}</span>
                       </div>
                     ))}
+                  </div>
+
+                  <div className="mt-5">
+                    <h3 className="text-sm font-semibold uppercase tracking-wide text-white/85">Media Terbaru</h3>
+                    <div className="mt-2 grid grid-cols-2 gap-2">
+                      {hewanDetail.dokumentasi.length === 0 && (
+                        <p className="col-span-2 rounded-lg border border-white/20 bg-white/5 px-3 py-2 text-xs text-white/70">
+                          Belum ada media yang terbaca untuk hewan ini.
+                        </p>
+                      )}
+                      {hewanDetail.dokumentasi.slice(0, 6).map((item) => (
+                        <div key={item.id} className="overflow-hidden rounded-lg border border-white/20 bg-white/10">
+                          {item.tipe_media === "video" ? (
+                            <video
+                              src={item.media_public_url}
+                              controls
+                              preload="metadata"
+                              className="h-28 w-full object-cover"
+                            />
+                          ) : (
+                            <img
+                              src={item.media_public_url}
+                              alt={item.tahap}
+                              loading="lazy"
+                              className="h-28 w-full object-cover"
+                            />
+                          )}
+                          <p className="px-2 py-1 text-[11px] text-white/80">
+                            {LABEL_TAHAP[item.tahap as keyof typeof LABEL_TAHAP] ?? item.tahap}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 </article>
 

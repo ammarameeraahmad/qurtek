@@ -30,27 +30,50 @@ function pickFirstString(row: GenericRow | null, keys: string[]) {
   return null;
 }
 
-async function queryRowsByHewanId(
+async function queryRowsByHewanRef(
   supabase: ReturnType<typeof getSupabaseServerClient>,
   tableName: string,
   selectClause: string,
-  hewanId: string
+  hewanId: string,
+  hewanCode: string | null = null
 ) {
+  const probes: Array<{ column: string; value: string }> = [
+    { column: "hewan_id", value: hewanId },
+    { column: "hewan_qurban_id", value: hewanId },
+    { column: "id_hewan", value: hewanId },
+  ];
+
+  if (hewanCode) {
+    probes.push(
+      { column: "kode_hewan", value: hewanCode },
+      { column: "kode", value: hewanCode },
+      { column: "qr_code", value: hewanCode }
+    );
+  }
+
   const initialColumns = selectClause
     .split(",")
     .map((column) => column.trim())
     .filter((column) => column.length > 0);
 
-  for (const column of ["hewan_id", "hewan_qurban_id", "id_hewan"]) {
+  let hadSuccessfulQuery = false;
+
+  for (const { column, value } of probes) {
     let selectColumns = [...initialColumns];
 
     while (selectColumns.length > 0) {
       const { data, error } = await supabase
         .from(tableName)
         .select(selectColumns.join(","))
-        .eq(column, hewanId);
+        .eq(column, value);
 
-      if (!error) return (data ?? []) as unknown as GenericRow[];
+      if (!error) {
+        hadSuccessfulQuery = true;
+        const rows = (data ?? []) as unknown as GenericRow[];
+        if (rows.length > 0) return rows;
+        break;
+      }
+
       if (!isMissingColumnError(error)) throw error;
 
       const missingColumn = getMissingColumnName(error);
@@ -62,6 +85,7 @@ async function queryRowsByHewanId(
     }
   }
 
+  if (hadSuccessfulQuery) return [] as GenericRow[];
   return [] as GenericRow[];
 }
 
@@ -258,7 +282,7 @@ export async function GET(
                   nama: fallbackKelompokNama ?? "Belum ada kelompok",
                   hewan_id: null,
                 }
-            : null,
+              : null,
           hewan: null,
           status_tracking: [],
           dokumentasi: [],
@@ -268,22 +292,25 @@ export async function GET(
     }
 
     const hewanId = String(hewan.id);
+    const hewanCode = pickFirstString(hewan, ["kode", "kode_hewan", "qr_code", "code"]);
 
     const [statusRows, dokumentasiRows] = await Promise.all([
       statusTable
-        ? queryRowsByHewanId(
+        ? queryRowsByHewanRef(
             supabase,
             statusTable,
             "id,tahap,waktu,catatan,created_at",
-            hewanId
+            hewanId,
+            hewanCode
           )
         : Promise.resolve([] as GenericRow[]),
       dokumentasiTable
-        ? queryRowsByHewanId(
+        ? queryRowsByHewanRef(
             supabase,
             dokumentasiTable,
             "id,tahap,tipe_tahapan,tipe_media,media_type,jenis_media,media_url,url,url_media,thumbnail_url,captured_at,waktu_capture,uploaded_at,waktu_upload,created_at",
-            hewanId
+            hewanId,
+            hewanCode
           )
         : Promise.resolve([] as GenericRow[]),
     ]);
@@ -314,7 +341,9 @@ export async function GET(
           ? item.media_url
           : typeof item.url === "string"
             ? item.url
-            : "";
+            : typeof item.url_media === "string"
+              ? item.url_media
+              : "";
       const thumbnailPath = typeof item.thumbnail_url === "string" ? item.thumbnail_url : "";
 
       if (mediaPath) rawPaths.add(mediaPath);
@@ -332,7 +361,7 @@ export async function GET(
               ? item.url
               : typeof item.url_media === "string"
                 ? item.url_media
-              : "";
+                : "";
         const thumbnailPath = typeof item.thumbnail_url === "string" ? item.thumbnail_url : "";
 
         if (!mediaPath) return null;
@@ -352,7 +381,7 @@ export async function GET(
                 ? item.media_type
                 : typeof item.jenis_media === "string"
                   ? item.jenis_media
-                : "foto") as "foto" | "video",
+                  : "foto") as "foto" | "video",
           media_url: mediaPath,
           thumbnail_url: thumbnailPath || null,
           captured_at:
@@ -366,9 +395,9 @@ export async function GET(
               ? item.uploaded_at
               : typeof item.waktu_upload === "string"
                 ? item.waktu_upload
-              : typeof item.created_at === "string"
-                ? item.created_at
-                : null,
+                : typeof item.created_at === "string"
+                  ? item.created_at
+                  : null,
           media_public_url:
             signedUrlMap.get(mediaPath) ??
             supabase.storage.from(bucket).getPublicUrl(mediaPath).data.publicUrl,

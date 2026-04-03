@@ -120,6 +120,9 @@ export async function POST(req: NextRequest) {
     const hewanArea = [hewanRow.area, hewanRow.wilayah, hewanRow.zona, hewanRow.lokasi]
       .map((value) => (typeof value === "string" ? value.trim() : ""))
       .find((value) => value.length > 0) ?? "";
+    const hewanCode = [hewanRow.kode, hewanRow.kode_hewan, hewanRow.qr_code, hewanRow.code]
+      .map((value) => (typeof value === "string" ? value.trim() : ""))
+      .find((value) => value.length > 0) ?? null;
     const petugasArea = petugasSession.area?.trim() ?? "";
     if (hewanArea && petugasArea && hewanArea.toLowerCase() !== petugasArea.toLowerCase()) {
       return NextResponse.json(
@@ -194,7 +197,9 @@ export async function POST(req: NextRequest) {
     }
 
     const payload: Record<string, unknown> = {
-      [hewanRefColumn]: hewanId,
+      [hewanRefColumn]: ["kode_hewan", "kode", "qr_code"].includes(hewanRefColumn)
+        ? (hewanCode ?? hewanId)
+        : hewanId,
       [tahapColumn]: tahap,
       [mediaTypeColumn]: tipeMedia,
       [mediaPathColumn]: uploadedPath,
@@ -221,6 +226,8 @@ export async function POST(req: NextRequest) {
         ? inserted.media_url
         : typeof inserted.url === "string"
           ? inserted.url
+          : typeof inserted.url_media === "string"
+            ? inserted.url_media
           : uploadedPath;
 
     const publicUrl = supabase.storage.from(bucket).getPublicUrl(mediaPath).data.publicUrl;

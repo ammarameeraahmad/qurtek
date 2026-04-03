@@ -57,9 +57,11 @@ async function loadShohibulTargets(
   supabase: ReturnType<typeof getSupabaseServerClient>,
   shohibulTable: string | null,
   kelompokId: string | null,
+  hewanId: string,
+  hewanCode: string | null,
   origin: string
 ) {
-  if (!shohibulTable || !kelompokId) return [] as Array<{ shohibulId: string; portalUrl: string }>;
+  if (!shohibulTable) return [] as Array<{ shohibulId: string; portalUrl: string }>;
 
   const tokenColumn = await resolveExistingColumn(supabase, shohibulTable, [
     "unique_token",
@@ -68,33 +70,56 @@ async function loadShohibulTargets(
   ]);
   if (!tokenColumn) return [];
 
-  const { data, error } = await supabase
-    .from(shohibulTable)
-    .select("*")
-    .eq("kelompok_id", kelompokId);
+  const probes: Array<{ column: string; value: string | null }> = [
+    { column: "kelompok_id", value: kelompokId },
+    { column: "group_id", value: kelompokId },
+    { column: "kelompok_qurban_id", value: kelompokId },
+    { column: "hewan_id", value: hewanId },
+    { column: "hewan_qurban_id", value: hewanId },
+    { column: "id_hewan", value: hewanId },
+  ];
 
-  if (error) {
-    if (isMissingColumnError(error)) return [];
-    throw error;
+  if (hewanCode) {
+    probes.push(
+      { column: "kode_hewan", value: hewanCode },
+      { column: "kode", value: hewanCode },
+      { column: "qr_code", value: hewanCode }
+    );
   }
 
-  const rows = (data ?? []) as Array<Record<string, unknown>>;
+  const targetsById = new Map<string, { shohibulId: string; portalUrl: string }>();
 
-  return rows.flatMap((item) => {
-    const token = item[tokenColumn];
-    const id = item.id;
+  for (const probe of probes) {
+    const value = probe.value?.trim();
+    if (!value) continue;
 
-    if (typeof token !== "string" || !token || typeof id !== "string") {
-      return [];
+    const { data, error } = await supabase
+      .from(shohibulTable)
+      .select("*")
+      .eq(probe.column, value);
+
+    if (error) {
+      if (isMissingColumnError(error)) continue;
+      throw error;
     }
 
-    return [
-      {
+    const rows = (data ?? []) as Array<Record<string, unknown>>;
+    for (const item of rows) {
+      const token = item[tokenColumn];
+      const id = item.id;
+
+      if (typeof token !== "string" || !token.trim() || typeof id !== "string" || !id.trim()) {
+        continue;
+      }
+
+      targetsById.set(id, {
         shohibulId: id,
         portalUrl: `${origin}/d/${token}`,
-      },
-    ];
-  });
+      });
+    }
+  }
+
+  return Array.from(targetsById.values());
 }
 
 export async function POST(req: NextRequest) {
@@ -224,7 +249,14 @@ export async function POST(req: NextRequest) {
     }
 
     const kelompokId = await resolveKelompokIdForHewan(supabase, kelompokTable, hewan, hewanId);
-    const targets = await loadShohibulTargets(supabase, shohibulTable, kelompokId, req.nextUrl.origin);
+    const targets = await loadShohibulTargets(
+      supabase,
+      shohibulTable,
+      kelompokId,
+      hewanId,
+      kode,
+      req.nextUrl.origin
+    );
 
     if (targets.length > 0) {
       await sendPushToTargets(targets, {

@@ -14,6 +14,8 @@ import {
 
 type GenericRow = Record<string, unknown>;
 
+const SIGNED_URL_TTL_SECONDS = 60 * 60 * 24;
+
 function pickFirstString(row: GenericRow | null, keys: string[]) {
   if (!row) return null;
 
@@ -32,38 +34,86 @@ async function queryRowsByHewanId(
   supabase: ReturnType<typeof getSupabaseServerClient>,
   tableName: string,
   selectClause: string,
-  hewanId: string
+  hewanId: string,
+  hewanCode: string | null = null
 ) {
+  const probes: Array<{ column: string; value: string }> = [
+    { column: "hewan_id", value: hewanId },
+    { column: "hewan_qurban_id", value: hewanId },
+    { column: "id_hewan", value: hewanId },
+  ];
+
+  if (hewanCode) {
+    probes.push(
+      { column: "kode_hewan", value: hewanCode },
+      { column: "kode", value: hewanCode },
+      { column: "qr_code", value: hewanCode }
+    );
+  }
+
   const initialColumns = selectClause
     .split(",")
     .map((column) => column.trim())
     .filter((column) => column.length > 0);
 
-  for (const column of ["hewan_id", "hewan_qurban_id", "id_hewan"]) {
+  let hadSuccessfulQuery = false;
+
+  for (const { column, value } of probes) {
     let selectColumns = [...initialColumns];
 
     while (selectColumns.length > 0) {
       const { data, error } = await supabase
         .from(tableName)
         .select(selectColumns.join(","))
-        .eq(column, hewanId);
+        .eq(column, value);
 
       if (!error) {
-        return (data ?? []) as unknown as GenericRow[];
+        hadSuccessfulQuery = true;
+        const rows = (data ?? []) as unknown as GenericRow[];
+        if (rows.length > 0) return rows;
+        break;
       }
 
       if (!isMissingColumnError(error)) throw error;
 
       const missingColumn = getMissingColumnName(error);
-      if (!missingColumn) break;
+      if (!missingColumn) {
+        break;
+      }
 
       const nextColumns = selectColumns.filter((item) => item !== missingColumn);
-      if (nextColumns.length === selectColumns.length) break;
+      if (nextColumns.length === selectColumns.length) {
+        break;
+      }
       selectColumns = nextColumns;
     }
   }
 
+  if (hadSuccessfulQuery) return [] as GenericRow[];
   return [] as GenericRow[];
+}
+
+async function loadSignedUrlMap(
+  supabase: ReturnType<typeof getSupabaseServerClient>,
+  bucket: string,
+  paths: string[]
+) {
+  if (!paths.length) return new Map<string, string>();
+
+  const { data, error } = await supabase.storage
+    .from(bucket)
+    .createSignedUrls(paths, SIGNED_URL_TTL_SECONDS);
+
+  if (error || !data) return new Map<string, string>();
+
+  const result = new Map<string, string>();
+  for (const item of data) {
+    if (item?.path && item?.signedUrl) {
+      result.set(item.path, item.signedUrl);
+    }
+  }
+
+  return result;
 }
 
 export async function GET(
@@ -136,6 +186,7 @@ export async function GET(
     }
 
     const hewanId = String(hewan.id);
+    const hewanCode = pickFirstString(hewan as GenericRow, ["kode", "kode_hewan", "qr_code", "code"]);
 
     let kelompok: { id: string; nama: string } | null = null;
     let kelompokNamaFallback: string | null =
@@ -244,7 +295,8 @@ export async function GET(
           supabase,
           statusTable,
           "id,tahap,waktu,catatan,petugas_id,petugas_qurban_id,created_at",
-          hewanId
+          hewanId,
+          hewanCode
         )
       : [];
 
@@ -252,10 +304,95 @@ export async function GET(
       ? await queryRowsByHewanId(
           supabase,
           dokumentasiTable,
-          "id,tahap,tipe_tahapan,tipe_media,media_type,jenis_media,uploaded_at,waktu_upload,created_at",
-          hewanId
+          "id,tahap,tipe_tahapan,tipe_media,media_type,jenis_media,media_url,url,url_media,thumbnail_url,uploaded_at,waktu_upload,created_at,captured_at,waktu_capture",
+          hewanId,
+          hewanCode
         )
       : [];
+
+    const bucket = process.env.NEXT_PUBLIC_STORAGE_BUCKET || "qurban_media";
+    const rawPaths = new Set<string>();
+
+    for (const item of dokumentasiRows) {
+      const mediaPath =
+        typeof item.media_url === "string"
+          ? item.media_url
+          : typeof item.url === "string"
+            ? item.url
+            : typeof item.url_media === "string"
+              ? item.url_media
+              : "";
+      const thumbnailPath = typeof item.thumbnail_url === "string" ? item.thumbnail_url : "";
+
+      if (mediaPath) rawPaths.add(mediaPath);
+      if (thumbnailPath) rawPaths.add(thumbnailPath);
+    }
+
+    const signedUrlMap = await loadSignedUrlMap(supabase, bucket, Array.from(rawPaths));
+
+    const dokumentasi = dokumentasiRows
+      .map((item, index) => {
+        const mediaPath =
+          typeof item.media_url === "string"
+            ? item.media_url
+            : typeof item.url === "string"
+              ? item.url
+              : typeof item.url_media === "string"
+                ? item.url_media
+                : "";
+        const thumbnailPath = typeof item.thumbnail_url === "string" ? item.thumbnail_url : "";
+
+        if (!mediaPath) return null;
+
+        const tahap =
+          typeof item.tahap === "string"
+            ? item.tahap
+            : typeof item.tipe_tahapan === "string"
+              ? item.tipe_tahapan
+              : "";
+
+        return {
+          id: typeof item.id === "string" ? item.id : `media-${index}`,
+          tahap,
+          tipe_media:
+            (typeof item.tipe_media === "string"
+              ? item.tipe_media
+              : typeof item.media_type === "string"
+                ? item.media_type
+                : typeof item.jenis_media === "string"
+                  ? item.jenis_media
+                  : "foto") as "foto" | "video",
+          media_url: mediaPath,
+          thumbnail_url: thumbnailPath || null,
+          captured_at:
+            typeof item.captured_at === "string"
+              ? item.captured_at
+              : typeof item.waktu_capture === "string"
+                ? item.waktu_capture
+                : null,
+          uploaded_at:
+            typeof item.uploaded_at === "string"
+              ? item.uploaded_at
+              : typeof item.waktu_upload === "string"
+                ? item.waktu_upload
+                : typeof item.created_at === "string"
+                  ? item.created_at
+                  : null,
+          media_public_url:
+            signedUrlMap.get(mediaPath) ??
+            supabase.storage.from(bucket).getPublicUrl(mediaPath).data.publicUrl,
+          thumbnail_public_url: thumbnailPath
+            ? (signedUrlMap.get(thumbnailPath) ??
+              supabase.storage.from(bucket).getPublicUrl(thumbnailPath).data.publicUrl)
+            : null,
+        };
+      })
+      .filter((item): item is NonNullable<typeof item> => item !== null)
+      .sort((a, b) => {
+        const aTs = Date.parse(a.uploaded_at ?? "") || 0;
+        const bTs = Date.parse(b.uploaded_at ?? "") || 0;
+        return bTs - aTs;
+      });
 
     trackingRows.sort((a, b) => {
       const aTime = Date.parse(String(a.waktu ?? a.created_at ?? "")) || 0;
@@ -272,13 +409,8 @@ export async function GET(
     const mediaCountByTahap: Record<string, number> = {};
     for (const tahap of TAHAP_URUTAN) mediaCountByTahap[tahap] = 0;
 
-    for (const item of dokumentasiRows) {
-      const tahap =
-        typeof item.tahap === "string"
-          ? item.tahap
-          : typeof item.tipe_tahapan === "string"
-            ? item.tipe_tahapan
-            : "";
+    for (const item of dokumentasi) {
+      const tahap = typeof item.tahap === "string" ? item.tahap : "";
       if (!tahap) continue;
       mediaCountByTahap[tahap] = (mediaCountByTahap[tahap] ?? 0) + 1;
     }
@@ -316,7 +448,7 @@ export async function GET(
         kelompok,
         shohibul,
         status_tracking: trackingRows,
-        dokumentasi: dokumentasiRows,
+        dokumentasi,
         checklist: TAHAP_URUTAN.map((tahap) => ({
           tahap,
           selesai: tahapSelesai.has(tahap),
