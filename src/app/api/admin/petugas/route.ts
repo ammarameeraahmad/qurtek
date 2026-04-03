@@ -49,10 +49,18 @@ async function resolvePetugasColumns(
 ): Promise<PetugasColumns> {
   const [nama, noHp, area, pin, isActive] = await Promise.all([
     resolveExistingColumn(supabase, tableName, ["nama"]),
-    resolveExistingColumn(supabase, tableName, ["no_hp", "no_hp_petugas", "whatsapp", "no_whatsapp"]),
-    resolveExistingColumn(supabase, tableName, ["area"]),
-    resolveExistingColumn(supabase, tableName, ["pin"]),
-    resolveExistingColumn(supabase, tableName, ["is_active", "aktif"]),
+    resolveExistingColumn(supabase, tableName, [
+      "no_hp",
+      "no_hp_petugas",
+      "whatsapp",
+      "no_whatsapp",
+      "nomor_hp",
+      "no_telp",
+      "telepon",
+    ]),
+    resolveExistingColumn(supabase, tableName, ["area", "wilayah", "zona", "lokasi"]),
+    resolveExistingColumn(supabase, tableName, ["pin", "kode_pin", "passcode"]),
+    resolveExistingColumn(supabase, tableName, ["is_active", "aktif", "status_aktif", "enabled"]),
   ]);
 
   return {
@@ -62,6 +70,30 @@ async function resolvePetugasColumns(
     pin,
     isActive,
   };
+}
+
+function parseActiveValue(raw: unknown, fallback: boolean) {
+  if (typeof raw === "boolean") return raw;
+  if (typeof raw === "number") return raw !== 0;
+
+  if (typeof raw === "string") {
+    const value = raw.trim().toLowerCase();
+    if (!value) return fallback;
+    if (["false", "0", "nonaktif", "inactive", "disabled", "off"].includes(value)) return false;
+    if (["true", "1", "aktif", "active", "enabled", "on"].includes(value)) return true;
+  }
+
+  return fallback;
+}
+
+function normalizePinValue(raw: unknown, fallback: string) {
+  if (raw == null) return fallback;
+
+  const digits = String(raw).replace(/\D/g, "");
+  if (!digits) return fallback;
+
+  if (digits.length >= 6) return digits.slice(0, 6);
+  return digits.padStart(6, "0");
 }
 
 function normalizePetugasRow(
@@ -86,8 +118,8 @@ function normalizePetugasRow(
     nama: typeof namaValue === "string" && namaValue.trim() ? namaValue : fallback.nama,
     no_hp: noHpValue == null ? fallback.no_hp : String(noHpValue),
     area: areaValue == null ? fallback.area : String(areaValue),
-    pin: pinValue == null ? fallback.pin : String(pinValue),
-    is_active: activeValue === false ? false : fallback.is_active,
+    pin: normalizePinValue(pinValue, fallback.pin),
+    is_active: parseActiveValue(activeValue, fallback.is_active),
   };
 }
 
@@ -128,7 +160,32 @@ function buildPetugasPayloadVariants(
     }
   }
 
-  return hasNumericVariant ? [payload, numericPayload] : [payload];
+  const variants: Array<Record<string, unknown>> = [payload];
+
+  if (hasNumericVariant) {
+    variants.push(numericPayload);
+  }
+
+  if (columns.isActive) {
+    variants.push({
+      ...payload,
+      [columns.isActive]: input.is_active ? "aktif" : "nonaktif",
+    });
+
+    if (hasNumericVariant) {
+      variants.push({
+        ...numericPayload,
+        [columns.isActive]: input.is_active ? "aktif" : "nonaktif",
+      });
+    }
+  }
+
+  const unique = new Map<string, Record<string, unknown>>();
+  for (const variant of variants) {
+    unique.set(JSON.stringify(variant), variant);
+  }
+
+  return Array.from(unique.values());
 }
 
 export async function GET(req: NextRequest) {

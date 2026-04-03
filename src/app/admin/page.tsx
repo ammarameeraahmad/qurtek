@@ -30,6 +30,8 @@ type HewanRow = {
   warna: string | null;
   berat_est: number | null;
   status: string;
+  kelompok_id?: string | null;
+  kelompok_nama?: string | null;
 };
 
 type PetugasRow = {
@@ -161,7 +163,7 @@ export default function AdminPage() {
       jenis: item.jenis,
       warna: item.warna ?? "",
       berat_est: item.berat_est == null ? "" : String(item.berat_est),
-      kelompok_nama: "",
+      kelompok_nama: item.kelompok_nama ?? "",
       status: item.status || "registered",
     });
     setEditingHewanId(item.id);
@@ -963,6 +965,7 @@ export default function AdminPage() {
                             {item.kode} • {item.jenis.toUpperCase()}
                           </p>
                           <p className="text-xs text-[#475467]">{item.warna || "-"}</p>
+                          <p className="text-xs text-[#475467]">Kelompok: {item.kelompok_nama || "-"}</p>
                           <p className="text-xs text-[#475467]">Status: {item.status}</p>
                         </div>
                         <div className="flex flex-wrap gap-2">

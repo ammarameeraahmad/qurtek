@@ -20,6 +20,7 @@ type ShohibulUpsertInput = {
   jenisQurban: string;
   tipe: string;
   kelompokId: string | null;
+  kelompokNama: string | null;
   token?: string;
 };
 
@@ -88,59 +89,88 @@ async function createUniqueToken() {
 }
 
 function buildShohibulPayloadCandidates(input: ShohibulUpsertInput) {
-  const baseLegacy = {
+  const modernByKelompokId = {
     nama: input.nama,
     kelompok_id: input.kelompokId,
-  };
-
-  const modernPayload = {
-    ...baseLegacy,
     no_whatsapp: input.noWhatsapp,
     jenis_qurban: input.jenisQurban,
     tipe: input.tipe,
   };
 
-  const modernMinimalPayload = {
-    ...baseLegacy,
+  const modernByKelompokNama = {
+    nama: input.nama,
+    kelompok_nama: input.kelompokNama,
+    no_whatsapp: input.noWhatsapp,
+    jenis_qurban: input.jenisQurban,
+    tipe: input.tipe,
+  };
+
+  const modernByKelompokText = {
+    nama: input.nama,
+    kelompok: input.kelompokNama,
+    no_whatsapp: input.noWhatsapp,
+    jenis_qurban: input.jenisQurban,
+    tipe: input.tipe,
+  };
+
+  const modernMinimalByKelompokId = {
+    nama: input.nama,
+    kelompok_id: input.kelompokId,
     no_whatsapp: input.noWhatsapp,
     tipe: input.tipe,
   };
 
-  const legacyPayload = {
-    ...baseLegacy,
+  const legacyByKelompokId = {
+    nama: input.nama,
+    kelompok_id: input.kelompokId,
     whatsapp: input.noWhatsapp,
     jenis: input.jenisQurban,
     porsi: input.tipe,
   };
 
-  const legacyMinimalPayload = {
-    ...baseLegacy,
+  const legacyByKelompokText = {
+    nama: input.nama,
+    kelompok: input.kelompokNama,
+    whatsapp: input.noWhatsapp,
+    jenis: input.jenisQurban,
+    porsi: input.tipe,
+  };
+
+  const legacyMinimalByKelompokId = {
+    nama: input.nama,
+    kelompok_id: input.kelompokId,
     whatsapp: input.noWhatsapp,
     porsi: input.tipe,
   };
 
+  const basePayloads = [
+    modernByKelompokId,
+    modernByKelompokNama,
+    modernByKelompokText,
+    modernMinimalByKelompokId,
+    legacyByKelompokId,
+    legacyByKelompokText,
+    legacyMinimalByKelompokId,
+  ];
+
   if (!input.token) {
-    return [modernPayload, modernMinimalPayload, legacyPayload, legacyMinimalPayload];
+    return basePayloads;
   }
 
-  return [
+  return basePayloads.flatMap((payload) => [
     {
-      ...modernPayload,
+      ...payload,
       unique_token: input.token,
     },
     {
-      ...modernMinimalPayload,
-      unique_token: input.token,
-    },
-    {
-      ...legacyPayload,
+      ...payload,
       link_unik: input.token,
     },
     {
-      ...legacyMinimalPayload,
+      ...payload,
       token: input.token,
     },
-  ];
+  ]);
 }
 
 export async function GET(req: NextRequest) {
@@ -223,7 +253,7 @@ export async function POST(req: NextRequest) {
     const noWhatsapp = String(body.no_whatsapp ?? "").trim();
     const jenisQurban = String(body.jenis_qurban ?? "sapi").trim();
     const tipe = String(body.tipe ?? "1/7").trim();
-    const kelompokNama = body.kelompok_nama ? String(body.kelompok_nama) : null;
+    const kelompokNama = normalizeKelompokName(body.kelompok_nama ? String(body.kelompok_nama) : null) || null;
 
     if (!nama || !noWhatsapp) {
       return NextResponse.json({ error: "Nama dan No. WhatsApp wajib diisi." }, { status: 400 });
@@ -242,6 +272,7 @@ export async function POST(req: NextRequest) {
       jenisQurban,
       tipe,
       kelompokId,
+      kelompokNama,
       token,
     });
 
@@ -308,7 +339,7 @@ export async function PATCH(req: NextRequest) {
     const noWhatsapp = String(body.no_whatsapp ?? "").trim();
     const jenisQurban = String(body.jenis_qurban ?? "sapi").trim();
     const tipe = String(body.tipe ?? "1/7").trim();
-    const kelompokNama = body.kelompok_nama ? String(body.kelompok_nama) : null;
+    const kelompokNama = normalizeKelompokName(body.kelompok_nama ? String(body.kelompok_nama) : null) || null;
 
     if (!id || !nama || !noWhatsapp) {
       return NextResponse.json({ error: "ID, nama, dan No. WhatsApp wajib diisi." }, { status: 400 });
@@ -325,6 +356,7 @@ export async function PATCH(req: NextRequest) {
       jenisQurban,
       tipe,
       kelompokId,
+      kelompokNama,
     });
 
     let data: Record<string, unknown> | null = null;
