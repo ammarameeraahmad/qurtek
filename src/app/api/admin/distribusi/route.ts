@@ -1,7 +1,36 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseServerClient } from "@/lib/supabase-server";
 import { isAdminAuthorized, unauthorizedResponse } from "@/lib/admin-auth";
-import { getReadableErrorMessage, isMissingTableError, resolveTableName } from "@/lib/supabase-compat";
+import {
+  getReadableErrorMessage,
+  isMissingColumnError,
+  isMissingTableError,
+  resolveTableName,
+} from "@/lib/supabase-compat";
+
+function buildDistribusiPayloadCandidates(hewanId: string, shohibulId: string, beratKg: number | null, at: string) {
+  const safeBerat = Number.isNaN(beratKg) ? null : beratKg;
+
+  return [
+    {
+      hewan_id: hewanId,
+      shohibul_id: shohibulId,
+      berat_kg: safeBerat,
+      diterima_at: at,
+    },
+    {
+      hewan_qurban_id: hewanId,
+      shohibul_qurban_id: shohibulId,
+      berat: safeBerat,
+      created_at: at,
+    },
+    {
+      hewan_id: hewanId,
+      shohibul_id: shohibulId,
+      berat_kg: safeBerat,
+    },
+  ];
+}
 
 export async function GET(req: NextRequest) {
   if (!isAdminAuthorized(req)) return unauthorizedResponse();
@@ -71,20 +100,33 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "hewan_id dan shohibul_id wajib diisi." }, { status: 400 });
     }
 
-    const { data, error } = await supabase
-      .from(distribusiTable)
-      .insert([
-        {
-          hewan_id: hewanId,
-          shohibul_id: shohibulId,
-          berat_kg: Number.isNaN(beratKg) ? null : beratKg,
-          diterima_at: new Date().toISOString(),
-        },
-      ])
-      .select("*")
-      .single();
+    const now = new Date().toISOString();
+    const payloads = buildDistribusiPayloadCandidates(hewanId, shohibulId, beratKg, now);
+
+    let data: Record<string, unknown> | null = null;
+    let error: unknown = null;
+
+    for (const payload of payloads) {
+      const result = await supabase
+        .from(distribusiTable)
+        .insert([payload])
+        .select("*")
+        .single();
+
+      if (!result.error) {
+        data = result.data;
+        error = null;
+        break;
+      }
+
+      error = result.error;
+      if (!isMissingColumnError(result.error)) {
+        break;
+      }
+    }
 
     if (error) throw error;
+    if (!data) throw new Error("Gagal menyimpan distribusi.");
 
     const normalized = {
       id: data.id,
@@ -102,6 +144,85 @@ export async function POST(req: NextRequest) {
   } catch (error) {
     return NextResponse.json(
       { error: getReadableErrorMessage(error, "Gagal menyimpan distribusi.") },
+      { status: 500 }
+    );
+  }
+}
+
+export async function PATCH(req: NextRequest) {
+  if (!isAdminAuthorized(req)) return unauthorizedResponse();
+
+  try {
+    const supabase = getSupabaseServerClient();
+    const distribusiTable = await resolveTableName(supabase, "distribusi");
+    if (!distribusiTable) {
+      return NextResponse.json(
+        { error: "Tabel distribusi belum tersedia di Supabase. Jalankan schema terbaru." },
+        { status: 503 }
+      );
+    }
+
+    const body = await req.json();
+
+    const id = String(body.id ?? "").trim();
+    const hewanId = String(body.hewan_id ?? "").trim();
+    const shohibulId = String(body.shohibul_id ?? "").trim();
+    const beratKg = body.berat_kg ? Number(body.berat_kg) : null;
+
+    if (!id || !hewanId || !shohibulId) {
+      return NextResponse.json(
+        { error: "id, hewan_id, dan shohibul_id wajib diisi." },
+        { status: 400 }
+      );
+    }
+
+    const now = new Date().toISOString();
+    const payloads = buildDistribusiPayloadCandidates(hewanId, shohibulId, beratKg, now);
+
+    let data: Record<string, unknown> | null = null;
+    let error: unknown = null;
+
+    for (const payload of payloads) {
+      const result = await supabase
+        .from(distribusiTable)
+        .update(payload)
+        .eq("id", id)
+        .select("*")
+        .maybeSingle();
+
+      if (!result.error) {
+        data = result.data;
+        error = null;
+        break;
+      }
+
+      error = result.error;
+      if (!isMissingColumnError(result.error)) {
+        break;
+      }
+    }
+
+    if (error) throw error;
+    if (!data) {
+      return NextResponse.json({ error: "Data distribusi tidak ditemukan." }, { status: 404 });
+    }
+
+    const normalized = {
+      id: data.id,
+      hewan_id: data.hewan_id ?? data.hewan_qurban_id ?? hewanId,
+      shohibul_id: data.shohibul_id ?? data.shohibul_qurban_id ?? shohibulId,
+      berat_kg:
+        data.berat_kg ??
+        data.berat ??
+        (Number.isNaN(beratKg) || typeof beratKg !== "number" ? null : beratKg),
+      foto_serah: data.foto_serah ?? data.foto ?? null,
+      diterima_at: data.diterima_at ?? data.created_at ?? null,
+    };
+
+    return NextResponse.json({ data: normalized });
+  } catch (error) {
+    return NextResponse.json(
+      { error: getReadableErrorMessage(error, "Gagal memperbarui distribusi.") },
       { status: 500 }
     );
   }

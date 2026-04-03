@@ -14,6 +14,15 @@ type InsertResult = {
   error: unknown;
 };
 
+type ShohibulUpsertInput = {
+  nama: string;
+  noWhatsapp: string;
+  jenisQurban: string;
+  tipe: string;
+  kelompokId: string | null;
+  token?: string;
+};
+
 async function resolveShohibulTokenColumn(supabase: ReturnType<typeof getSupabaseServerClient>, tableName: string) {
   const candidates = ["unique_token", "link_unik", "token"];
 
@@ -76,6 +85,62 @@ async function createUniqueToken() {
   }
 
   throw new Error("Failed to generate unique shohibul token.");
+}
+
+function buildShohibulPayloadCandidates(input: ShohibulUpsertInput) {
+  const baseLegacy = {
+    nama: input.nama,
+    kelompok_id: input.kelompokId,
+  };
+
+  const modernPayload = {
+    ...baseLegacy,
+    no_whatsapp: input.noWhatsapp,
+    jenis_qurban: input.jenisQurban,
+    tipe: input.tipe,
+  };
+
+  const modernMinimalPayload = {
+    ...baseLegacy,
+    no_whatsapp: input.noWhatsapp,
+    tipe: input.tipe,
+  };
+
+  const legacyPayload = {
+    ...baseLegacy,
+    whatsapp: input.noWhatsapp,
+    jenis: input.jenisQurban,
+    porsi: input.tipe,
+  };
+
+  const legacyMinimalPayload = {
+    ...baseLegacy,
+    whatsapp: input.noWhatsapp,
+    porsi: input.tipe,
+  };
+
+  if (!input.token) {
+    return [modernPayload, modernMinimalPayload, legacyPayload, legacyMinimalPayload];
+  }
+
+  return [
+    {
+      ...modernPayload,
+      unique_token: input.token,
+    },
+    {
+      ...modernMinimalPayload,
+      unique_token: input.token,
+    },
+    {
+      ...legacyPayload,
+      link_unik: input.token,
+    },
+    {
+      ...legacyMinimalPayload,
+      token: input.token,
+    },
+  ];
 }
 
 export async function GET(req: NextRequest) {
@@ -148,34 +213,14 @@ export async function POST(req: NextRequest) {
     const kelompokId = await resolveKelompokId(kelompokNama);
     const token = await createUniqueToken();
 
-    const payloads: Array<Record<string, unknown>> = [
-      {
-        nama,
-        no_whatsapp: noWhatsapp,
-        jenis_qurban: jenisQurban,
-        tipe,
-        kelompok_id: kelompokId,
-        unique_token: token,
-      },
-      {
-        nama,
-        no_whatsapp: noWhatsapp,
-        kelompok_id: kelompokId,
-        unique_token: token,
-      },
-      {
-        nama,
-        whatsapp: noWhatsapp,
-        kelompok_id: kelompokId,
-        link_unik: token,
-      },
-      {
-        nama,
-        whatsapp: noWhatsapp,
-        kelompok_id: kelompokId,
-        token,
-      },
-    ];
+    const payloads = buildShohibulPayloadCandidates({
+      nama,
+      noWhatsapp,
+      jenisQurban,
+      tipe,
+      kelompokId,
+      token,
+    });
 
     let data: Record<string, unknown> | null = null;
     let error: unknown = null;
@@ -217,6 +262,90 @@ export async function POST(req: NextRequest) {
   } catch (error) {
     return NextResponse.json(
       { error: getReadableErrorMessage(error, "Failed to create shohibul.") },
+      { status: 500 }
+    );
+  }
+}
+
+export async function PATCH(req: NextRequest) {
+  if (!isAdminAuthorized(req)) return unauthorizedResponse();
+
+  try {
+    const supabase = getSupabaseServerClient();
+    const shohibulTable = await resolveTableName(supabase, "shohibul");
+    if (!shohibulTable) {
+      return NextResponse.json({ error: "Tabel shohibul belum tersedia di Supabase." }, { status: 503 });
+    }
+
+    const body = await req.json();
+
+    const id = String(body.id ?? "").trim();
+    const nama = String(body.nama ?? "").trim();
+    const noWhatsapp = String(body.no_whatsapp ?? "").trim();
+    const jenisQurban = String(body.jenis_qurban ?? "sapi").trim();
+    const tipe = String(body.tipe ?? "1/7").trim();
+    const kelompokNama = body.kelompok_nama ? String(body.kelompok_nama) : null;
+
+    if (!id || !nama || !noWhatsapp) {
+      return NextResponse.json({ error: "ID, nama, dan No. WhatsApp wajib diisi." }, { status: 400 });
+    }
+
+    if (!["sapi", "kambing"].includes(jenisQurban)) {
+      return NextResponse.json({ error: "Jenis qurban harus sapi atau kambing." }, { status: 400 });
+    }
+
+    const kelompokId = await resolveKelompokId(kelompokNama);
+    const payloads = buildShohibulPayloadCandidates({
+      nama,
+      noWhatsapp,
+      jenisQurban,
+      tipe,
+      kelompokId,
+    });
+
+    let data: Record<string, unknown> | null = null;
+    let error: unknown = null;
+
+    for (const payload of payloads) {
+      const result = await supabase
+        .from(shohibulTable)
+        .update(payload)
+        .eq("id", id)
+        .select("*")
+        .maybeSingle();
+
+      if (!result.error) {
+        data = result.data;
+        error = null;
+        break;
+      }
+
+      error = result.error;
+      if (!isMissingColumnError(result.error)) {
+        break;
+      }
+    }
+
+    if (error) throw error;
+    if (!data) {
+      return NextResponse.json({ error: "Data shohibul tidak ditemukan." }, { status: 404 });
+    }
+
+    const normalized = {
+      id: data.id,
+      nama: data.nama ?? nama,
+      no_whatsapp: data.no_whatsapp ?? data.whatsapp ?? noWhatsapp,
+      jenis_qurban: data.jenis_qurban ?? data.jenis ?? jenisQurban,
+      tipe: data.tipe ?? data.porsi ?? tipe,
+      kelompok_id: data.kelompok_id ?? kelompokId,
+      unique_token: data.unique_token ?? data.link_unik ?? data.token ?? "",
+      created_at: data.created_at ?? null,
+    };
+
+    return NextResponse.json({ data: normalized });
+  } catch (error) {
+    return NextResponse.json(
+      { error: getReadableErrorMessage(error, "Failed to update shohibul.") },
       { status: 500 }
     );
   }

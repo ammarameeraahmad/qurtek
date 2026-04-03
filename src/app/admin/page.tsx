@@ -77,6 +77,10 @@ export default function AdminPage() {
   const [hewanRows, setHewanRows] = useState<HewanRow[]>([]);
   const [petugasRows, setPetugasRows] = useState<PetugasRow[]>([]);
   const [distribusiRows, setDistribusiRows] = useState<DistribusiRow[]>([]);
+  const [editingShohibulId, setEditingShohibulId] = useState<string | null>(null);
+  const [editingHewanId, setEditingHewanId] = useState<string | null>(null);
+  const [editingPetugasId, setEditingPetugasId] = useState<string | null>(null);
+  const [editingDistribusiId, setEditingDistribusiId] = useState<string | null>(null);
 
   const [shohibulForm, setShohibulForm] = useState({
     nama: "",
@@ -92,6 +96,7 @@ export default function AdminPage() {
     warna: "",
     berat_est: "",
     kelompok_nama: "",
+    status: "registered",
   });
 
   const [petugasForm, setPetugasForm] = useState({
@@ -99,6 +104,7 @@ export default function AdminPage() {
     no_hp: "",
     area: "",
     pin: "",
+    is_active: true,
   });
 
   const [distribusiForm, setDistribusiForm] = useState({
@@ -114,6 +120,103 @@ export default function AdminPage() {
     if (!metrics.totalHewan) return "0%";
     return `${Math.round((metrics.dokumentasiLengkap / metrics.totalHewan) * 100)}%`;
   }, [metrics]);
+
+  function resetShohibulForm() {
+    setShohibulForm({ nama: "", no_whatsapp: "", jenis_qurban: "sapi", tipe: "1/7", kelompok_nama: "" });
+    setEditingShohibulId(null);
+  }
+
+  function resetHewanForm() {
+    setHewanForm({ kode: "", jenis: "sapi", warna: "", berat_est: "", kelompok_nama: "", status: "registered" });
+    setEditingHewanId(null);
+  }
+
+  function resetPetugasForm() {
+    setPetugasForm({ nama: "", no_hp: "", area: "", pin: "", is_active: true });
+    setEditingPetugasId(null);
+  }
+
+  function resetDistribusiForm() {
+    setDistribusiForm({ hewan_id: "", shohibul_id: "", berat_kg: "" });
+    setEditingDistribusiId(null);
+  }
+
+  function beginEditShohibul(item: ShohibulRow) {
+    setShohibulForm({
+      nama: item.nama,
+      no_whatsapp: item.no_whatsapp,
+      jenis_qurban: item.jenis_qurban,
+      tipe: item.tipe,
+      kelompok_nama: "",
+    });
+    setEditingShohibulId(item.id);
+    setSuccess("");
+    setError("");
+  }
+
+  function beginEditHewan(item: HewanRow) {
+    setHewanForm({
+      kode: item.kode,
+      jenis: item.jenis,
+      warna: item.warna ?? "",
+      berat_est: item.berat_est == null ? "" : String(item.berat_est),
+      kelompok_nama: "",
+      status: item.status || "registered",
+    });
+    setEditingHewanId(item.id);
+    setSuccess("");
+    setError("");
+  }
+
+  function beginEditPetugas(item: PetugasRow) {
+    setPetugasForm({
+      nama: item.nama,
+      no_hp: item.no_hp ?? "",
+      area: item.area ?? "",
+      pin: item.pin,
+      is_active: item.is_active,
+    });
+    setEditingPetugasId(item.id);
+    setSuccess("");
+    setError("");
+  }
+
+  function beginEditDistribusi(item: DistribusiRow) {
+    setDistribusiForm({
+      hewan_id: item.hewan_id,
+      shohibul_id: item.shohibul_id,
+      berat_kg: item.berat_kg == null ? "" : String(item.berat_kg),
+    });
+    setEditingDistribusiId(item.id);
+    setSuccess("");
+    setError("");
+  }
+
+  async function copyToClipboard(value: string) {
+    if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(value);
+        return true;
+      } catch {
+        // Fallback to textarea copy below.
+      }
+    }
+
+    try {
+      const textarea = document.createElement("textarea");
+      textarea.value = value;
+      textarea.setAttribute("readonly", "true");
+      textarea.style.position = "fixed";
+      textarea.style.left = "-9999px";
+      document.body.appendChild(textarea);
+      textarea.select();
+      const copied = document.execCommand("copy");
+      document.body.removeChild(textarea);
+      return copied;
+    } catch {
+      return false;
+    }
+  }
 
   async function loadAll() {
     try {
@@ -209,6 +312,10 @@ export default function AdminPage() {
     setHewanRows([]);
     setPetugasRows([]);
     setDistribusiRows([]);
+    resetShohibulForm();
+    resetHewanForm();
+    resetPetugasForm();
+    resetDistribusiForm();
   }
 
   async function handleCreateShohibul(e: FormEvent<HTMLFormElement>) {
@@ -217,24 +324,29 @@ export default function AdminPage() {
     setError("");
     setSuccess("");
 
+    const isEditMode = Boolean(editingShohibulId);
+
     try {
       const res = await fetch("/api/admin/shohibul", {
-        method: "POST",
+        method: isEditMode ? "PATCH" : "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          id: editingShohibulId,
           ...shohibulForm,
           no_whatsapp: slugifyWhatsapp(shohibulForm.no_whatsapp),
         }),
       });
 
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Gagal menambah shohibul.");
+      if (!res.ok) {
+        throw new Error(json.error || (isEditMode ? "Gagal mengubah shohibul." : "Gagal menambah shohibul."));
+      }
 
-      setShohibulForm({ nama: "", no_whatsapp: "", jenis_qurban: "sapi", tipe: "1/7", kelompok_nama: "" });
-      setSuccess("Data shohibul berhasil disimpan.");
+      resetShohibulForm();
+      setSuccess(isEditMode ? "Data shohibul berhasil diperbarui." : "Data shohibul berhasil disimpan.");
       await loadAll();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Gagal menambah shohibul.");
+      setError(err instanceof Error ? err.message : isEditMode ? "Gagal mengubah shohibul." : "Gagal menambah shohibul.");
     } finally {
       setBusy(false);
     }
@@ -246,24 +358,29 @@ export default function AdminPage() {
     setError("");
     setSuccess("");
 
+    const isEditMode = Boolean(editingHewanId);
+
     try {
       const res = await fetch("/api/admin/hewan", {
-        method: "POST",
+        method: isEditMode ? "PATCH" : "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          id: editingHewanId,
           ...hewanForm,
           berat_est: hewanForm.berat_est ? Number(hewanForm.berat_est) : null,
         }),
       });
 
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Gagal menambah hewan.");
+      if (!res.ok) {
+        throw new Error(json.error || (isEditMode ? "Gagal mengubah hewan." : "Gagal menambah hewan."));
+      }
 
-      setHewanForm({ kode: "", jenis: "sapi", warna: "", berat_est: "", kelompok_nama: "" });
-      setSuccess("Data hewan berhasil disimpan.");
+      resetHewanForm();
+      setSuccess(isEditMode ? "Data hewan berhasil diperbarui." : "Data hewan berhasil disimpan.");
       await loadAll();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Gagal menambah hewan.");
+      setError(err instanceof Error ? err.message : isEditMode ? "Gagal mengubah hewan." : "Gagal menambah hewan.");
     } finally {
       setBusy(false);
     }
@@ -275,21 +392,28 @@ export default function AdminPage() {
     setError("");
     setSuccess("");
 
+    const isEditMode = Boolean(editingPetugasId);
+
     try {
       const res = await fetch("/api/admin/petugas", {
-        method: "POST",
+        method: isEditMode ? "PATCH" : "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(petugasForm),
+        body: JSON.stringify({
+          id: editingPetugasId,
+          ...petugasForm,
+        }),
       });
 
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Gagal menambah petugas.");
+      if (!res.ok) {
+        throw new Error(json.error || (isEditMode ? "Gagal mengubah petugas." : "Gagal menambah petugas."));
+      }
 
-      setPetugasForm({ nama: "", no_hp: "", area: "", pin: "" });
-      setSuccess("Data petugas berhasil disimpan.");
+      resetPetugasForm();
+      setSuccess(isEditMode ? "Data petugas berhasil diperbarui." : "Data petugas berhasil disimpan.");
       await loadAll();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Gagal menambah petugas.");
+      setError(err instanceof Error ? err.message : isEditMode ? "Gagal mengubah petugas." : "Gagal menambah petugas.");
     } finally {
       setBusy(false);
     }
@@ -301,24 +425,29 @@ export default function AdminPage() {
     setError("");
     setSuccess("");
 
+    const isEditMode = Boolean(editingDistribusiId);
+
     try {
       const res = await fetch("/api/admin/distribusi", {
-        method: "POST",
+        method: isEditMode ? "PATCH" : "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          id: editingDistribusiId,
           ...distribusiForm,
           berat_kg: distribusiForm.berat_kg ? Number(distribusiForm.berat_kg) : null,
         }),
       });
 
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Gagal menyimpan distribusi.");
+      if (!res.ok) {
+        throw new Error(json.error || (isEditMode ? "Gagal mengubah distribusi." : "Gagal menyimpan distribusi."));
+      }
 
-      setDistribusiForm({ hewan_id: "", shohibul_id: "", berat_kg: "" });
-      setSuccess("Data distribusi berhasil disimpan.");
+      resetDistribusiForm();
+      setSuccess(isEditMode ? "Data distribusi berhasil diperbarui." : "Data distribusi berhasil disimpan.");
       await loadAll();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Gagal menyimpan distribusi.");
+      setError(err instanceof Error ? err.message : isEditMode ? "Gagal mengubah distribusi." : "Gagal menyimpan distribusi.");
     } finally {
       setBusy(false);
     }
@@ -360,16 +489,46 @@ export default function AdminPage() {
     setQrPreview({ kode, dataUrl: json.dataUrl });
   }
 
-  function copyLink(token: string) {
-    const link = `${window.location.origin}/d/${token}`;
-    navigator.clipboard.writeText(link);
+  async function copyLink(token: string) {
+    setError("");
+    setSuccess("");
+
+    if (!token) {
+      setError("Token link shohibul belum tersedia.");
+      return;
+    }
+
+    const base = origin || window.location.origin;
+    const link = `${base}/d/${token}`;
+    const copied = await copyToClipboard(link);
+
+    if (!copied) {
+      setError("Gagal menyalin link. Coba lagi.");
+      return;
+    }
+
     setSuccess("Link unik berhasil disalin.");
   }
 
-  function copyMessage(item: ShohibulRow) {
-    const link = `${window.location.origin}/d/${item.unique_token}`;
+  async function copyMessage(item: ShohibulRow) {
+    setError("");
+    setSuccess("");
+
+    if (!item.unique_token) {
+      setError("Token link shohibul belum tersedia.");
+      return;
+    }
+
+    const base = origin || window.location.origin;
+    const link = `${base}/d/${item.unique_token}`;
     const message = `Assalamu'alaikum ${item.nama},\n\nBerikut link dokumentasi qurban Anda:\n${link}\n\nSilakan buka link tersebut untuk melihat proses qurban secara real-time.`;
-    navigator.clipboard.writeText(message);
+    const copied = await copyToClipboard(message);
+
+    if (!copied) {
+      setError("Gagal menyalin pesan WA. Coba lagi.");
+      return;
+    }
+
     setSuccess("Template pesan WhatsApp berhasil disalin.");
   }
 
@@ -390,7 +549,12 @@ export default function AdminPage() {
       const rows = lines.slice(1);
 
       for (const row of rows) {
-        const [_, nama, whatsapp, jenis, tipe, kelompok] = row.split(",").map((item) => item.trim());
+        const columns = row.split(",").map((item) => item.trim());
+        const nama = columns[1] ?? "";
+        const whatsapp = columns[2] ?? "";
+        const jenis = columns[3] ?? "";
+        const tipe = columns[4] ?? "";
+        const kelompok = columns[5] ?? "";
         if (!nama || !whatsapp) continue;
 
         await fetch("/api/admin/shohibul", {
@@ -521,7 +685,10 @@ export default function AdminPage() {
 
         <section className="grid gap-6 md:grid-cols-3">
           <form className="panel panel-admin p-5" onSubmit={handleCreateShohibul}>
-            <h2 className="text-xl font-semibold">Tambah Shohibul</h2>
+            <h2 className="text-xl font-semibold">{editingShohibulId ? "Edit Shohibul" : "Tambah Shohibul"}</h2>
+            {editingShohibulId && (
+              <p className="mt-1 text-xs text-[#667085]">Mode edit aktif. Simpan untuk memperbarui data shohibul.</p>
+            )}
             <div className="mt-4 grid gap-3 text-sm">
               <input
                 required
@@ -574,17 +741,31 @@ export default function AdminPage() {
                 className="rounded-lg border border-[#d0d5dd] px-3 py-2"
               />
 
-              <button
-                disabled={busy}
-                className="mt-1 rounded-lg bg-[#141414] px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
-              >
-                Simpan Shohibul
-              </button>
+              <div className="mt-1 flex flex-wrap gap-2">
+                <button
+                  disabled={busy}
+                  className="rounded-lg bg-[#141414] px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                >
+                  {editingShohibulId ? "Simpan Perubahan" : "Simpan Shohibul"}
+                </button>
+                {editingShohibulId && (
+                  <button
+                    type="button"
+                    onClick={resetShohibulForm}
+                    className="rounded-lg border border-[#d0d5dd] px-4 py-2 text-sm font-semibold"
+                  >
+                    Batal Edit
+                  </button>
+                )}
+              </div>
             </div>
           </form>
 
           <form className="panel panel-admin p-5" onSubmit={handleCreateHewan}>
-            <h2 className="text-xl font-semibold">Tambah Hewan</h2>
+            <h2 className="text-xl font-semibold">{editingHewanId ? "Edit Hewan" : "Tambah Hewan"}</h2>
+            {editingHewanId && (
+              <p className="mt-1 text-xs text-[#667085]">Mode edit aktif. Simpan untuk memperbarui data hewan.</p>
+            )}
             <div className="mt-4 grid gap-3 text-sm">
               <input
                 placeholder="Kode (kosongkan untuk auto)"
@@ -619,17 +800,43 @@ export default function AdminPage() {
                 onChange={(e) => setHewanForm((prev) => ({ ...prev, kelompok_nama: e.target.value }))}
                 className="rounded-lg border border-[#d0d5dd] px-3 py-2"
               />
-              <button
-                disabled={busy}
-                className="mt-1 rounded-lg bg-[#141414] px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+              <select
+                value={hewanForm.status}
+                onChange={(e) => setHewanForm((prev) => ({ ...prev, status: e.target.value }))}
+                className="rounded-lg border border-[#d0d5dd] px-3 py-2"
               >
-                Simpan Hewan
-              </button>
+                <option value="registered">Registered</option>
+                <option value="ready">Ready</option>
+                <option value="slaughtering">Slaughtering</option>
+                <option value="processing">Processing</option>
+                <option value="distributing">Distributing</option>
+                <option value="done">Done</option>
+              </select>
+              <div className="mt-1 flex flex-wrap gap-2">
+                <button
+                  disabled={busy}
+                  className="rounded-lg bg-[#141414] px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                >
+                  {editingHewanId ? "Simpan Perubahan" : "Simpan Hewan"}
+                </button>
+                {editingHewanId && (
+                  <button
+                    type="button"
+                    onClick={resetHewanForm}
+                    className="rounded-lg border border-[#d0d5dd] px-4 py-2 text-sm font-semibold"
+                  >
+                    Batal Edit
+                  </button>
+                )}
+              </div>
             </div>
           </form>
 
           <form className="panel panel-admin p-5" onSubmit={handleCreatePetugas}>
-            <h2 className="text-xl font-semibold">Tambah Petugas</h2>
+            <h2 className="text-xl font-semibold">{editingPetugasId ? "Edit Petugas" : "Tambah Petugas"}</h2>
+            {editingPetugasId && (
+              <p className="mt-1 text-xs text-[#667085]">Mode edit aktif. Simpan untuk memperbarui data petugas.</p>
+            )}
             <div className="mt-4 grid gap-3 text-sm">
               <input
                 required
@@ -659,12 +866,33 @@ export default function AdminPage() {
                 onChange={(e) => setPetugasForm((prev) => ({ ...prev, pin: e.target.value }))}
                 className="rounded-lg border border-[#d0d5dd] px-3 py-2"
               />
-              <button
-                disabled={busy}
-                className="mt-1 rounded-lg bg-[#141414] px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+              <select
+                value={petugasForm.is_active ? "aktif" : "nonaktif"}
+                onChange={(e) =>
+                  setPetugasForm((prev) => ({ ...prev, is_active: e.target.value === "aktif" }))
+                }
+                className="rounded-lg border border-[#d0d5dd] px-3 py-2"
               >
-                Simpan Petugas
-              </button>
+                <option value="aktif">Aktif</option>
+                <option value="nonaktif">Nonaktif</option>
+              </select>
+              <div className="mt-1 flex flex-wrap gap-2">
+                <button
+                  disabled={busy}
+                  className="rounded-lg bg-[#141414] px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                >
+                  {editingPetugasId ? "Simpan Perubahan" : "Simpan Petugas"}
+                </button>
+                {editingPetugasId && (
+                  <button
+                    type="button"
+                    onClick={resetPetugasForm}
+                    className="rounded-lg border border-[#d0d5dd] px-4 py-2 text-sm font-semibold"
+                  >
+                    Batal Edit
+                  </button>
+                )}
+              </div>
             </div>
           </form>
         </section>
@@ -688,16 +916,25 @@ export default function AdminPage() {
                       </p>
                       <div className="mt-3 flex gap-2">
                         <button
+                          type="button"
                           onClick={() => copyLink(item.unique_token)}
                           className="rounded-lg border border-[#d0d5dd] px-3 py-1 text-xs font-semibold"
                         >
                           Copy Link
                         </button>
                         <button
+                          type="button"
                           onClick={() => copyMessage(item)}
                           className="rounded-lg border border-[#d0d5dd] px-3 py-1 text-xs font-semibold"
                         >
                           Copy Pesan WA
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => beginEditShohibul(item)}
+                          className="rounded-lg border border-[#d0d5dd] px-3 py-1 text-xs font-semibold"
+                        >
+                          Edit
                         </button>
                       </div>
                     </div>
@@ -726,12 +963,22 @@ export default function AdminPage() {
                           <p className="text-xs text-[#475467]">{item.warna || "-"}</p>
                           <p className="text-xs text-[#475467]">Status: {item.status}</p>
                         </div>
-                        <button
-                          onClick={() => generateQr(item.kode)}
-                          className="rounded-lg border border-[#d0d5dd] px-3 py-1 text-xs font-semibold"
-                        >
-                          Generate QR
-                        </button>
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            onClick={() => generateQr(item.kode)}
+                            className="rounded-lg border border-[#d0d5dd] px-3 py-1 text-xs font-semibold"
+                          >
+                            Generate QR
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => beginEditHewan(item)}
+                            className="rounded-lg border border-[#d0d5dd] px-3 py-1 text-xs font-semibold"
+                          >
+                            Edit
+                          </button>
+                        </div>
                       </div>
                     </div>
                   ))}
@@ -754,6 +1001,7 @@ export default function AdminPage() {
                   <th className="pb-2">No HP</th>
                   <th className="pb-2">PIN</th>
                   <th className="pb-2">Status</th>
+                  <th className="pb-2">Aksi</th>
                 </tr>
               </thead>
               <tbody>
@@ -764,6 +1012,15 @@ export default function AdminPage() {
                     <td className="py-2">{item.no_hp || "-"}</td>
                     <td className="py-2">{item.pin}</td>
                     <td className="py-2">{item.is_active ? "Aktif" : "Nonaktif"}</td>
+                    <td className="py-2">
+                      <button
+                        type="button"
+                        onClick={() => beginEditPetugas(item)}
+                        className="rounded-lg border border-[#d0d5dd] px-3 py-1 text-xs font-semibold"
+                      >
+                        Edit
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -773,10 +1030,13 @@ export default function AdminPage() {
 
         <section className="mt-6 grid gap-6 lg:grid-cols-2">
           <form className="panel panel-admin p-5" onSubmit={handleCreateDistribusi}>
-            <h2 className="text-xl font-semibold">Input Distribusi Daging</h2>
+            <h2 className="text-xl font-semibold">{editingDistribusiId ? "Edit Distribusi Daging" : "Input Distribusi Daging"}</h2>
             <p className="mt-1 text-sm text-[#475467]">
               Catat pembagian daging per shohibul untuk modul distribusi.
             </p>
+            {editingDistribusiId && (
+              <p className="mt-1 text-xs text-[#667085]">Mode edit aktif. Simpan untuk memperbarui data distribusi.</p>
+            )}
 
             <div className="mt-4 grid gap-3 text-sm">
               <select
@@ -816,12 +1076,23 @@ export default function AdminPage() {
                 className="rounded-lg border border-[#d0d5dd] px-3 py-2"
               />
 
-              <button
-                disabled={busy}
-                className="rounded-lg bg-[#141414] px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
-              >
-                Simpan Distribusi
-              </button>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  disabled={busy}
+                  className="rounded-lg bg-[#141414] px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                >
+                  {editingDistribusiId ? "Simpan Perubahan" : "Simpan Distribusi"}
+                </button>
+                {editingDistribusiId && (
+                  <button
+                    type="button"
+                    onClick={resetDistribusiForm}
+                    className="rounded-lg border border-[#d0d5dd] px-4 py-2 text-sm font-semibold"
+                  >
+                    Batal Edit
+                  </button>
+                )}
+              </div>
             </div>
           </form>
 
@@ -847,6 +1118,13 @@ export default function AdminPage() {
                         <p className="text-[#475467]">
                           Waktu: {row.diterima_at ? new Date(row.diterima_at).toLocaleString("id-ID") : "-"}
                         </p>
+                        <button
+                          type="button"
+                          onClick={() => beginEditDistribusi(row)}
+                          className="mt-2 rounded-lg border border-[#d0d5dd] px-3 py-1 text-xs font-semibold"
+                        >
+                          Edit
+                        </button>
                       </div>
                     );
                   })}

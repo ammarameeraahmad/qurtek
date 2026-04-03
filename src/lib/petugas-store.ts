@@ -75,6 +75,40 @@ export async function addPetugasToLocalStore(input: {
   return row;
 }
 
+export async function updatePetugasInLocalStore(input: {
+  id: string;
+  nama: string;
+  no_hp: string | null;
+  area: string | null;
+  pin: string;
+  is_active: boolean;
+}) {
+  const items = await readPetugasLocalStore();
+  const idx = items.findIndex((item) => item.id === input.id);
+
+  if (idx < 0) {
+    throw new Error("Data petugas tidak ditemukan.");
+  }
+
+  if (items.some((item, itemIdx) => itemIdx !== idx && item.pin === input.pin)) {
+    throw new Error("PIN sudah dipakai petugas lain.");
+  }
+
+  const next = {
+    ...items[idx],
+    nama: input.nama,
+    no_hp: input.no_hp,
+    area: input.area,
+    pin: input.pin,
+    is_active: input.is_active,
+  };
+
+  items[idx] = next;
+  await writePetugasLocalStore(items);
+
+  return next;
+}
+
 export async function findActivePetugasByPin(pin: string) {
   const items = await readPetugasLocalStore();
   return items.find((item) => item.pin === pin && item.is_active) ?? null;

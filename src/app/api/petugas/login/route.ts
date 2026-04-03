@@ -70,7 +70,7 @@ export async function POST(req: NextRequest) {
     const sessionData = {
       id: data.id,
       nama: data.nama ?? "",
-      no_hp: data.no_hp ?? data.no_hp_petugas ?? null,
+      no_hp: data.no_hp ?? data.no_hp_petugas ?? data.whatsapp ?? data.no_whatsapp ?? null,
       area: data.area ?? null,
       is_active: data.is_active ?? true,
     };

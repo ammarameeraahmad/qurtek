@@ -205,3 +205,112 @@ export async function POST(req: NextRequest) {
     );
   }
 }
+
+export async function PATCH(req: NextRequest) {
+  if (!isAdminAuthorized(req)) return unauthorizedResponse();
+
+  try {
+    const supabase = getSupabaseServerClient();
+    const hewanTable = await resolveTableName(supabase, "hewan");
+    if (!hewanTable) {
+      return NextResponse.json({ error: "Tabel hewan belum tersedia di Supabase." }, { status: 503 });
+    }
+
+    const body = await req.json();
+
+    const id = String(body.id ?? "").trim();
+    const jenis = String(body.jenis ?? "sapi").trim();
+    const warna = body.warna ? String(body.warna).trim() : null;
+    const beratEst = body.berat_est ? Number(body.berat_est) : null;
+    const kelompokNama = body.kelompok_nama ? String(body.kelompok_nama) : null;
+    const status = body.status ? String(body.status).trim() : "registered";
+    const kode = body.kode ? String(body.kode).trim() : "";
+
+    if (!id || !kode) {
+      return NextResponse.json({ error: "ID dan kode hewan wajib diisi." }, { status: 400 });
+    }
+
+    if (!["sapi", "kambing"].includes(jenis)) {
+      return NextResponse.json({ error: "Jenis hewan harus sapi atau kambing." }, { status: 400 });
+    }
+
+    const { kelompokId, viaKelompokTable } = await resolveKelompokId(kelompokNama);
+
+    const payloads: Array<Record<string, unknown>> = [
+      {
+        kode,
+        jenis,
+        warna,
+        berat_est: Number.isNaN(beratEst) ? null : beratEst,
+        status,
+        kelompok_id: kelompokId,
+      },
+      {
+        kode,
+        jenis,
+        status,
+      },
+      {
+        qr_code: kode,
+        jenis,
+        status,
+        kelompok_id: kelompokId,
+      },
+      {
+        qr_code: kode,
+        jenis,
+        status,
+      },
+    ];
+
+    let updated: Record<string, unknown> | null = null;
+    let updateError: unknown = null;
+
+    for (const payload of payloads) {
+      const result = await supabase
+        .from(hewanTable)
+        .update(payload)
+        .eq("id", id)
+        .select("*")
+        .maybeSingle();
+
+      if (!result.error) {
+        updated = result.data;
+        updateError = null;
+        break;
+      }
+
+      updateError = result.error;
+      if (!isMissingColumnError(result.error)) {
+        break;
+      }
+    }
+
+    if (updateError) throw updateError;
+    if (!updated) {
+      return NextResponse.json({ error: "Data hewan tidak ditemukan." }, { status: 404 });
+    }
+
+    if (viaKelompokTable) {
+      await attachHewanToKelompok(kelompokId, String(updated.id));
+    }
+
+    const normalized = {
+      id: updated.id,
+      kode: updated.kode ?? updated.kode_hewan ?? updated.code ?? updated.qr_code ?? kode,
+      jenis: updated.jenis ?? updated.jenis_qurban ?? jenis,
+      warna: updated.warna ?? updated.warna_bulu ?? null,
+      berat_est: updated.berat_est ?? updated.berat ?? updated.berat_estimasi ?? null,
+      qr_code_url: updated.qr_code_url ?? updated.qr_url ?? null,
+      status: updated.status ?? status,
+      created_at: updated.created_at ?? null,
+    };
+
+    return NextResponse.json({ data: normalized });
+  } catch (error) {
+    return NextResponse.json(
+      { error: getReadableErrorMessage(error, "Failed to update hewan.") },
+      { status: 500 }
+    );
+  }
+}
