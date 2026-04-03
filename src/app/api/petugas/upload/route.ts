@@ -5,7 +5,7 @@ import { enforceRateLimit } from "@/lib/rate-limit";
 import { readPetugasSession, unauthorizedPetugasResponse } from "@/lib/petugas-auth";
 import {
   getReadableErrorMessage,
-  isMissingColumnError,
+  resolveExistingColumn,
   resolveTableName,
 } from "@/lib/supabase-compat";
 
@@ -163,62 +163,57 @@ export async function POST(req: NextRequest) {
 
     const uploadedPath = uploadData.path || path;
 
-    const payloads: Array<Record<string, unknown>> = [
-      {
-        hewan_id: hewanId,
-        petugas_id: petugasSession.id,
-        tahap,
-        tipe_media: tipeMedia,
-        media_url: uploadedPath,
-        file_size: file.size,
-        captured_at: now.toISOString(),
-        is_synced: true,
-      },
-      {
-        hewan_qurban_id: hewanId,
-        petugas_qurban_id: petugasSession.id,
-        tahap,
-        tipe_media: tipeMedia,
-        media_url: uploadedPath,
-        file_size: file.size,
-        captured_at: now.toISOString(),
-        is_synced: true,
-      },
-      {
-        hewan_id: hewanId,
-        petugas_id: petugasSession.id,
-        tahap,
-        media_type: tipeMedia,
-        url: uploadedPath,
-        file_size: file.size,
-        captured_at: now.toISOString(),
-        is_synced: true,
-      },
-    ];
+    const [
+      hewanRefColumn,
+      petugasRefColumn,
+      tahapColumn,
+      mediaTypeColumn,
+      mediaPathColumn,
+      fileSizeColumn,
+      capturedAtColumn,
+      isSyncedColumn,
+    ] = await Promise.all([
+      resolveExistingColumn(supabase, dokumentasiTable, ["hewan_id", "hewan_qurban_id", "id_hewan"]),
+      resolveExistingColumn(supabase, dokumentasiTable, ["petugas_id", "petugas_qurban_id", "id_petugas"]),
+      resolveExistingColumn(supabase, dokumentasiTable, ["tahap", "tipe_tahapan", "stage"]),
+      resolveExistingColumn(supabase, dokumentasiTable, ["tipe_media", "media_type", "jenis_media"]),
+      resolveExistingColumn(supabase, dokumentasiTable, ["media_url", "url", "url_media"]),
+      resolveExistingColumn(supabase, dokumentasiTable, ["file_size", "ukuran_file"]),
+      resolveExistingColumn(supabase, dokumentasiTable, ["captured_at", "waktu_capture"]),
+      resolveExistingColumn(supabase, dokumentasiTable, ["is_synced", "tersinkron"]),
+    ]);
 
-    let inserted: InsertedRow | null = null;
-    let insertError: unknown = null;
-
-    for (const payload of payloads) {
-      const result = await supabase
-        .from(dokumentasiTable)
-        .insert([payload])
-        .select("*")
-        .single();
-
-      if (!result.error) {
-        inserted = result.data;
-        insertError = null;
-        break;
-      }
-
-      insertError = result.error;
-      if (!isMissingColumnError(result.error)) {
-        break;
-      }
+    if (!hewanRefColumn || !tahapColumn || !mediaTypeColumn || !mediaPathColumn) {
+      return NextResponse.json(
+        {
+          error:
+            "Kolom inti tabel dokumentasi tidak lengkap. Jalankan migrasi Supabase terbaru (termasuk kolom hewan/tahap/media).",
+        },
+        { status: 500 }
+      );
     }
 
+    const payload: Record<string, unknown> = {
+      [hewanRefColumn]: hewanId,
+      [tahapColumn]: tahap,
+      [mediaTypeColumn]: tipeMedia,
+      [mediaPathColumn]: uploadedPath,
+    };
+
+    if (petugasRefColumn) payload[petugasRefColumn] = petugasSession.id;
+    if (fileSizeColumn) payload[fileSizeColumn] = file.size;
+    if (capturedAtColumn) payload[capturedAtColumn] = now.toISOString();
+    if (isSyncedColumn) payload[isSyncedColumn] = true;
+
+    const { data: insertedData, error: insertError } = await supabase
+      .from(dokumentasiTable)
+      .insert([payload])
+      .select("*")
+      .single();
+
     if (insertError) throw insertError;
+
+    const inserted = (insertedData ?? null) as InsertedRow | null;
     if (!inserted) throw new Error("Gagal menyimpan dokumentasi.");
 
     const mediaPath =
@@ -232,14 +227,15 @@ export async function POST(req: NextRequest) {
 
     const normalized = {
       id: inserted.id,
-      hewan_id: inserted.hewan_id ?? inserted.hewan_qurban_id ?? hewanId,
-      petugas_id: inserted.petugas_id ?? inserted.petugas_qurban_id ?? petugasSession.id,
-      tahap: inserted.tahap ?? tahap,
-      tipe_media: inserted.tipe_media ?? inserted.media_type ?? tipeMedia,
+      hewan_id: inserted.hewan_id ?? inserted.hewan_qurban_id ?? inserted.id_hewan ?? hewanId,
+      petugas_id:
+        inserted.petugas_id ?? inserted.petugas_qurban_id ?? inserted.id_petugas ?? petugasSession.id,
+      tahap: inserted.tahap ?? inserted.tipe_tahapan ?? tahap,
+      tipe_media: inserted.tipe_media ?? inserted.media_type ?? inserted.jenis_media ?? tipeMedia,
       media_url: mediaPath,
-      file_size: inserted.file_size ?? file.size,
-      captured_at: inserted.captured_at ?? now.toISOString(),
-      uploaded_at: inserted.uploaded_at ?? inserted.created_at ?? now.toISOString(),
+      file_size: inserted.file_size ?? inserted.ukuran_file ?? file.size,
+      captured_at: inserted.captured_at ?? inserted.waktu_capture ?? now.toISOString(),
+      uploaded_at: inserted.uploaded_at ?? inserted.waktu_upload ?? inserted.created_at ?? now.toISOString(),
       public_url: publicUrl,
     };
 

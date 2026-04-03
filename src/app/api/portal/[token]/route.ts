@@ -4,6 +4,7 @@ import { LABEL_TAHAP, TAHAP_URUTAN } from "@/lib/stages";
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { guessLegacyKelompokNameFromId } from "@/lib/kelompok-compat";
 import {
+  getMissingColumnName,
   getReadableErrorMessage,
   isMissingColumnError,
   resolveExistingColumn,
@@ -35,15 +36,30 @@ async function queryRowsByHewanId(
   selectClause: string,
   hewanId: string
 ) {
-  for (const column of ["hewan_id", "hewan_qurban_id"]) {
-    const { data, error } = await supabase
-      .from(tableName)
-      .select(selectClause)
-      .eq(column, hewanId);
+  const initialColumns = selectClause
+    .split(",")
+    .map((column) => column.trim())
+    .filter((column) => column.length > 0);
 
-    if (!error) return (data ?? []) as unknown as GenericRow[];
-    if (isMissingColumnError(error)) continue;
-    throw error;
+  for (const column of ["hewan_id", "hewan_qurban_id", "id_hewan"]) {
+    let selectColumns = [...initialColumns];
+
+    while (selectColumns.length > 0) {
+      const { data, error } = await supabase
+        .from(tableName)
+        .select(selectColumns.join(","))
+        .eq(column, hewanId);
+
+      if (!error) return (data ?? []) as unknown as GenericRow[];
+      if (!isMissingColumnError(error)) throw error;
+
+      const missingColumn = getMissingColumnName(error);
+      if (!missingColumn) break;
+
+      const nextColumns = selectColumns.filter((item) => item !== missingColumn);
+      if (nextColumns.length === selectColumns.length) break;
+      selectColumns = nextColumns;
+    }
   }
 
   return [] as GenericRow[];
@@ -266,7 +282,7 @@ export async function GET(
         ? queryRowsByHewanId(
             supabase,
             dokumentasiTable,
-            "id,tahap,tipe_media,media_type,media_url,url,thumbnail_url,captured_at,uploaded_at,created_at",
+            "id,tahap,tipe_tahapan,tipe_media,media_type,jenis_media,media_url,url,url_media,thumbnail_url,captured_at,waktu_capture,uploaded_at,waktu_upload,created_at",
             hewanId
           )
         : Promise.resolve([] as GenericRow[]),
@@ -314,6 +330,8 @@ export async function GET(
             ? item.media_url
             : typeof item.url === "string"
               ? item.url
+              : typeof item.url_media === "string"
+                ? item.url_media
               : "";
         const thumbnailPath = typeof item.thumbnail_url === "string" ? item.thumbnail_url : "";
 
@@ -321,19 +339,33 @@ export async function GET(
 
         return {
           id: typeof item.id === "string" ? item.id : `media-${index}`,
-          tahap: typeof item.tahap === "string" ? item.tahap : "",
+          tahap:
+            typeof item.tahap === "string"
+              ? item.tahap
+              : typeof item.tipe_tahapan === "string"
+                ? item.tipe_tahapan
+                : "",
           tipe_media:
             (typeof item.tipe_media === "string"
               ? item.tipe_media
               : typeof item.media_type === "string"
                 ? item.media_type
+                : typeof item.jenis_media === "string"
+                  ? item.jenis_media
                 : "foto") as "foto" | "video",
           media_url: mediaPath,
           thumbnail_url: thumbnailPath || null,
-          captured_at: typeof item.captured_at === "string" ? item.captured_at : null,
+          captured_at:
+            typeof item.captured_at === "string"
+              ? item.captured_at
+              : typeof item.waktu_capture === "string"
+                ? item.waktu_capture
+                : null,
           uploaded_at:
             typeof item.uploaded_at === "string"
               ? item.uploaded_at
+              : typeof item.waktu_upload === "string"
+                ? item.waktu_upload
               : typeof item.created_at === "string"
                 ? item.created_at
                 : null,

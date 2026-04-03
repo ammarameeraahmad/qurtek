@@ -5,6 +5,7 @@ import { enforceRateLimit } from "@/lib/rate-limit";
 import { readPetugasSession, unauthorizedPetugasResponse } from "@/lib/petugas-auth";
 import { guessLegacyKelompokNameFromId } from "@/lib/kelompok-compat";
 import {
+  getMissingColumnName,
   getReadableErrorMessage,
   isMissingColumnError,
   resolveExistingColumn,
@@ -33,18 +34,33 @@ async function queryRowsByHewanId(
   selectClause: string,
   hewanId: string
 ) {
-  for (const column of ["hewan_id", "hewan_qurban_id"]) {
-    const { data, error } = await supabase
-      .from(tableName)
-      .select(selectClause)
-      .eq(column, hewanId);
+  const initialColumns = selectClause
+    .split(",")
+    .map((column) => column.trim())
+    .filter((column) => column.length > 0);
 
-    if (!error) {
-      return (data ?? []) as unknown as GenericRow[];
+  for (const column of ["hewan_id", "hewan_qurban_id", "id_hewan"]) {
+    let selectColumns = [...initialColumns];
+
+    while (selectColumns.length > 0) {
+      const { data, error } = await supabase
+        .from(tableName)
+        .select(selectColumns.join(","))
+        .eq(column, hewanId);
+
+      if (!error) {
+        return (data ?? []) as unknown as GenericRow[];
+      }
+
+      if (!isMissingColumnError(error)) throw error;
+
+      const missingColumn = getMissingColumnName(error);
+      if (!missingColumn) break;
+
+      const nextColumns = selectColumns.filter((item) => item !== missingColumn);
+      if (nextColumns.length === selectColumns.length) break;
+      selectColumns = nextColumns;
     }
-
-    if (isMissingColumnError(error)) continue;
-    throw error;
   }
 
   return [] as GenericRow[];
@@ -236,7 +252,7 @@ export async function GET(
       ? await queryRowsByHewanId(
           supabase,
           dokumentasiTable,
-          "id,tahap,tipe_media,media_type,uploaded_at,created_at",
+          "id,tahap,tipe_tahapan,tipe_media,media_type,jenis_media,uploaded_at,waktu_upload,created_at",
           hewanId
         )
       : [];
@@ -257,7 +273,12 @@ export async function GET(
     for (const tahap of TAHAP_URUTAN) mediaCountByTahap[tahap] = 0;
 
     for (const item of dokumentasiRows) {
-      const tahap = typeof item.tahap === "string" ? item.tahap : "";
+      const tahap =
+        typeof item.tahap === "string"
+          ? item.tahap
+          : typeof item.tipe_tahapan === "string"
+            ? item.tipe_tahapan
+            : "";
       if (!tahap) continue;
       mediaCountByTahap[tahap] = (mediaCountByTahap[tahap] ?? 0) + 1;
     }

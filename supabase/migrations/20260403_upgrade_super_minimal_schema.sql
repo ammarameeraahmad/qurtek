@@ -174,6 +174,18 @@ create unique index if not exists idx_kelompok_nama_lower_unique
 create index if not exists idx_shohibul_kelompok_id
   on public.shohibul (kelompok_id);
 
+-- Optional compatibility columns for dokumentasi table.
+do $$
+begin
+  if to_regclass('public.dokumentasi') is not null then
+    alter table public.dokumentasi add column if not exists thumbnail_url text;
+    alter table public.dokumentasi add column if not exists file_size integer;
+    alter table public.dokumentasi add column if not exists captured_at timestamptz;
+    alter table public.dokumentasi add column if not exists uploaded_at timestamptz not null default now();
+    alter table public.dokumentasi add column if not exists is_synced boolean not null default false;
+  end if;
+end $$;
+
 -- Optional compatibility columns for hewan table.
 do $$
 begin

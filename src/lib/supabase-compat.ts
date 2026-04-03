@@ -50,6 +50,26 @@ export function isMissingColumnError(error: unknown) {
   return false;
 }
 
+export function getMissingColumnName(error: unknown) {
+  if (!error || typeof error !== "object") return null;
+
+  const message = (error as { message?: unknown }).message;
+  if (typeof message !== "string" || !message.trim()) return null;
+
+  const patterns = [
+    /could not find the ['"]([^'"]+)['"] column/i,
+    /column ['"]?([a-zA-Z_][a-zA-Z0-9_]*)['"]? does not exist/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = message.match(pattern);
+    const column = match?.[1]?.trim();
+    if (column) return column;
+  }
+
+  return null;
+}
+
 export function getReadableErrorMessage(error: unknown, fallback: string) {
   if (error instanceof Error && error.message) return error.message;
 
