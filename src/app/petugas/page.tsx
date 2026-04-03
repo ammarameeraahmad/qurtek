@@ -789,7 +789,9 @@ export default function PetugasPage() {
                   className="rounded-xl border border-white/25 bg-white/10 px-3 py-2 placeholder:text-white/60"
                 />
                 <button
-                  onClick={loadHewanByKode}
+                  onClick={() => {
+                    void loadHewanByKode();
+                  }}
                   disabled={loading}
                   className="rounded-xl bg-[#f0c03d] px-4 py-2 font-semibold text-[#0b2140] disabled:opacity-70"
                 >
