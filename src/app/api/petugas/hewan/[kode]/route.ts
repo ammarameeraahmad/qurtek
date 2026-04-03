@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseServerClient } from "@/lib/supabase-server";
-import { TAHAP_URUTAN } from "@/lib/stages";
+import { TAHAP_URUTAN, LABEL_TAHAP } from "@/lib/stages";
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { readPetugasSession, unauthorizedPetugasResponse } from "@/lib/petugas-auth";
 import { guessLegacyKelompokNameFromId } from "@/lib/kelompok-compat";
@@ -11,6 +11,23 @@ import {
   resolveExistingColumn,
   resolveTableName,
 } from "@/lib/supabase-compat";
+
+// Normalisasi tahap: snake_case/lowercase -> Title Case (cocok dengan TAHAP_URUTAN)
+function normalizeTahap(tahap: string): string {
+  if (!tahap) return tahap;
+  // Cek exact match dulu (pakai as any agar tidak error tipe)
+  if ((TAHAP_URUTAN as readonly string[]).includes(tahap)) return tahap;
+  // Coba match ignore case/underscore
+  const found = (TAHAP_URUTAN as readonly string[]).find(
+    (t) => t.replace(/\s+/g, "_").toLowerCase() === tahap.replace(/\s+/g, "_").toLowerCase()
+  );
+  if (found) return found;
+  // Title Case fallback
+  return tahap
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase())
+    .replace(/\s+/g, " ");
+}
 
 type GenericRow = Record<string, unknown>;
 
@@ -344,12 +361,14 @@ export async function GET(
 
         if (!mediaPath) return null;
 
-        const tahap =
+        // Normalisasi tahap agar cocok dengan TAHAP_URUTAN
+        const tahapRaw =
           typeof item.tahap === "string"
             ? item.tahap
             : typeof item.tipe_tahapan === "string"
               ? item.tipe_tahapan
               : "";
+        const tahap = normalizeTahap(tahapRaw);
 
         return {
           id: typeof item.id === "string" ? item.id : `media-${index}`,
