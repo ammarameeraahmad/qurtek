@@ -328,7 +328,8 @@ export default function PetugasPage() {
     }
   }
 
-  async function postTahapDone(hewanId: string, tahap: string) {
+  type PostTahapDoneResult = { data: unknown; pushResult?: { sent: number; skipped: number } };
+  async function postTahapDone(hewanId: string, tahap: string): Promise<PostTahapDoneResult> {
     const res = await fetch("/api/petugas/status", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -345,6 +346,7 @@ export default function PetugasPage() {
       throw new Error("Sesi petugas berakhir. Silakan login ulang.");
     }
     if (!res.ok) throw new Error(json.error || "Gagal update status tahap.");
+    return json as PostTahapDoneResult;
   }
 
   async function submitUpload(markDoneAfterUpload: boolean) {
