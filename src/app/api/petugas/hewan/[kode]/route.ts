@@ -107,7 +107,10 @@ export async function GET(
       return NextResponse.json({ error: "Hewan tidak ditemukan." }, { status: 404 });
     }
 
-    const hewanArea = typeof hewan.area === "string" ? hewan.area.trim() : "";
+    const hewanRow = hewan as Record<string, unknown>;
+    const hewanArea = [hewanRow.area, hewanRow.wilayah, hewanRow.zona, hewanRow.lokasi]
+      .map((value) => (typeof value === "string" ? value.trim() : ""))
+      .find((value) => value.length > 0) ?? "";
     const petugasArea = petugasSession.area?.trim() ?? "";
     if (hewanArea && petugasArea && hewanArea.toLowerCase() !== petugasArea.toLowerCase()) {
       return NextResponse.json(
