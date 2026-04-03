@@ -1,24 +1,44 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseServerClient } from "@/lib/supabase-server";
 import { isAdminAuthorized, unauthorizedResponse } from "@/lib/admin-auth";
+import { getReadableErrorMessage, isMissingTableError, resolveTableName } from "@/lib/supabase-compat";
 
 export async function GET(req: NextRequest) {
   if (!isAdminAuthorized(req)) return unauthorizedResponse();
 
   try {
     const supabase = getSupabaseServerClient();
+    const petugasTable = await resolveTableName(supabase, "petugas");
+
+    if (!petugasTable) {
+      return NextResponse.json({ data: [] });
+    }
 
     const { data, error } = await supabase
-      .from("petugas")
-      .select("id,nama,no_hp,area,pin,is_active")
-      .order("nama", { ascending: true });
+      .from(petugasTable)
+      .select("*");
+
+    if (error && isMissingTableError(error)) {
+      return NextResponse.json({ data: [] });
+    }
 
     if (error) throw error;
 
-    return NextResponse.json({ data: data ?? [] });
+    const mapped = (data ?? []).map((item) => ({
+      id: item.id,
+      nama: item.nama ?? "",
+      no_hp: item.no_hp ?? item.no_hp_petugas ?? null,
+      area: item.area ?? null,
+      pin: item.pin ?? "000000",
+      is_active: item.is_active ?? true,
+    }));
+
+    mapped.sort((a, b) => a.nama.localeCompare(b.nama));
+
+    return NextResponse.json({ data: mapped });
   } catch (error) {
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Failed to fetch petugas." },
+      { error: getReadableErrorMessage(error, "Failed to fetch petugas.") },
       { status: 500 }
     );
   }
@@ -29,6 +49,14 @@ export async function POST(req: NextRequest) {
 
   try {
     const supabase = getSupabaseServerClient();
+    const petugasTable = await resolveTableName(supabase, "petugas");
+    if (!petugasTable) {
+      return NextResponse.json(
+        { error: "Tabel petugas belum tersedia di Supabase. Jalankan schema terbaru." },
+        { status: 503 }
+      );
+    }
+
     const body = await req.json();
 
     const nama = String(body.nama ?? "").trim();
@@ -44,7 +72,7 @@ export async function POST(req: NextRequest) {
     }
 
     const { data, error } = await supabase
-      .from("petugas")
+      .from(petugasTable)
       .insert([
         {
           nama,
@@ -54,15 +82,24 @@ export async function POST(req: NextRequest) {
           is_active: true,
         },
       ])
-      .select("id,nama,no_hp,area,pin,is_active")
+      .select("*")
       .single();
 
     if (error) throw error;
 
-    return NextResponse.json({ data }, { status: 201 });
+    const normalized = {
+      id: data.id,
+      nama: data.nama ?? nama,
+      no_hp: data.no_hp ?? noHp,
+      area: data.area ?? area,
+      pin: data.pin ?? pin,
+      is_active: data.is_active ?? true,
+    };
+
+    return NextResponse.json({ data: normalized }, { status: 201 });
   } catch (error) {
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Failed to create petugas." },
+      { error: getReadableErrorMessage(error, "Failed to create petugas.") },
       { status: 500 }
     );
   }

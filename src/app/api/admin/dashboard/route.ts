@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseServerClient } from "@/lib/supabase-server";
 import { isAdminAuthorized, unauthorizedResponse } from "@/lib/admin-auth";
+import {
+  getReadableErrorMessage,
+  isMissingTableError,
+  resolveTableName,
+} from "@/lib/supabase-compat";
 
 export async function GET(req: NextRequest) {
   if (!isAdminAuthorized(req)) return unauthorizedResponse();
@@ -8,40 +13,58 @@ export async function GET(req: NextRequest) {
   try {
     const supabase = getSupabaseServerClient();
 
-    const [
-      sapiResult,
-      kambingResult,
-      shohibulResult,
-      hewanResult,
-      dokumentasiResult,
-      pushResult,
-      petugasResult,
-    ] = await Promise.all([
-      supabase.from("hewan").select("id", { count: "exact", head: true }).eq("jenis", "sapi"),
-      supabase.from("hewan").select("id", { count: "exact", head: true }).eq("jenis", "kambing"),
-      supabase.from("shohibul").select("id", { count: "exact", head: true }),
-      supabase.from("hewan").select("id,status"),
-      supabase.from("dokumentasi").select("hewan_id"),
-      supabase.from("push_subscriptions").select("id", { count: "exact", head: true }).eq("is_active", true),
-      supabase.from("petugas").select("id,nama,area,is_active"),
+    const [hewanTable, shohibulTable, dokumentasiTable, pushTable, petugasTable] = await Promise.all([
+      resolveTableName(supabase, "hewan"),
+      resolveTableName(supabase, "shohibul"),
+      resolveTableName(supabase, "dokumentasi"),
+      resolveTableName(supabase, "push_subscriptions"),
+      resolveTableName(supabase, "petugas"),
     ]);
 
-    const hewanData = hewanResult.data ?? [];
+    const [hewanResult, shohibulResult, dokumentasiResult, pushResult, petugasResult] = await Promise.all([
+      hewanTable ? supabase.from(hewanTable).select("*") : Promise.resolve({ data: [], error: null }),
+      shohibulTable ? supabase.from(shohibulTable).select("*") : Promise.resolve({ data: [], error: null }),
+      dokumentasiTable ? supabase.from(dokumentasiTable).select("*") : Promise.resolve({ data: [], error: null }),
+      pushTable ? supabase.from(pushTable).select("*") : Promise.resolve({ data: [], error: null }),
+      petugasTable ? supabase.from(petugasTable).select("*") : Promise.resolve({ data: [], error: null }),
+    ]);
+
+    for (const result of [hewanResult, shohibulResult, dokumentasiResult, pushResult, petugasResult]) {
+      if (result.error && !isMissingTableError(result.error)) {
+        throw result.error;
+      }
+    }
+
+    const hewanData = (hewanResult.data ?? []).map((item) => ({
+      id: item.id,
+      jenis: (item.jenis ?? item.jenis_qurban ?? "") as string,
+      status: item.status,
+    }));
+
     const dokumentasiData = dokumentasiResult.data ?? [];
-    const hewanWithMedia = new Set(dokumentasiData.map((item) => item.hewan_id));
+    const hewanWithMedia = new Set(
+      dokumentasiData
+        .map((item) => item.hewan_id ?? item.hewan_qurban_id)
+        .filter((value): value is string => typeof value === "string" && value.length > 0)
+    );
 
     const lengkap = hewanData.filter((item) => hewanWithMedia.has(item.id)).length;
     const belum = Math.max(hewanData.length - lengkap, 0);
 
+    const sapi = hewanData.filter((item) => item.jenis === "sapi").length;
+    const kambing = hewanData.filter((item) => item.jenis === "kambing").length;
+    const pushSubscribed = (pushResult.data ?? []).filter((item) => item.is_active !== false).length;
+    const petugasOnline = (petugasResult.data ?? []).filter((item) => item.is_active !== false).length;
+
     const metrics = {
-      sapi: sapiResult.count ?? 0,
-      kambing: kambingResult.count ?? 0,
-      shohibul: shohibulResult.count ?? 0,
+      sapi,
+      kambing,
+      shohibul: (shohibulResult.data ?? []).length,
       totalHewan: hewanData.length,
       dokumentasiLengkap: lengkap,
       dokumentasiBelum: belum,
-      pushSubscribed: pushResult.count ?? 0,
-      petugasOnline: (petugasResult.data ?? []).filter((item) => item.is_active).length,
+      pushSubscribed,
+      petugasOnline,
     };
 
     return NextResponse.json({
@@ -51,7 +74,7 @@ export async function GET(req: NextRequest) {
     });
   } catch (error) {
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Failed to load dashboard." },
+      { error: getReadableErrorMessage(error, "Failed to load dashboard.") },
       { status: 500 }
     );
   }
