@@ -168,6 +168,13 @@ export async function POST(req: NextRequest) {
     const tahap = normalizeTahap(tahapInput);
     const catatan = body.catatan ? String(body.catatan).trim() : null;
 
+    console.log("[STATUS] Received status update request:", {
+      hewanId,
+      tahap,
+      tahapInput,
+      catatan,
+    });
+
     if (!hewanId || !tahap) {
       return NextResponse.json({ error: "Data update status belum lengkap." }, { status: 400 });
     }
@@ -224,6 +231,8 @@ export async function POST(req: NextRequest) {
             ? hewan.code
             : hewanId;
 
+    console.log("[STATUS] Processing status update for hewan:", { id: hewanId, kode, tahap });
+
     let trackingRow: GenericRow | null = null;
 
     const payloads: Array<Record<string, unknown>> = [
@@ -278,6 +287,8 @@ export async function POST(req: NextRequest) {
       throw updateResult.error;
     }
 
+    console.log("[STATUS] Status tracking saved, loading shohibul targets...");
+
     const kelompokId = await resolveKelompokIdForHewan(supabase, kelompokTable, hewan, hewanId);
     const targets = await loadShohibulTargets(
       supabase,
@@ -288,12 +299,18 @@ export async function POST(req: NextRequest) {
       req.nextUrl.origin
     );
 
+    console.log("[STATUS] Found shohibul targets:", targets.length);
+
     let pushResult = { sent: 0, skipped: 0 };
     if (targets.length > 0) {
+      console.log("[STATUS] Sending push notification...");
       pushResult = await sendPushToTargets(targets, {
         title: "Qurtek",
         message: buildStatusMessage(tahap, kode),
       });
+      console.log("[STATUS] Push result:", pushResult);
+    } else {
+      console.log("[STATUS] No targets found, skipping push notification");
     }
 
     const waktu = new Date().toISOString();
@@ -307,8 +324,10 @@ export async function POST(req: NextRequest) {
       petugas_id: trackingRow?.petugas_id ?? trackingRow?.petugas_qurban_id ?? petugasSession.id,
     };
 
+    console.log("[STATUS] Status update completed successfully");
     return NextResponse.json({ data: normalized, pushResult });
   } catch (error) {
+    console.error("[STATUS] Error:", error);
     return NextResponse.json(
       { error: getReadableErrorMessage(error, "Gagal update status.") },
       { status: 500 }

@@ -19,12 +19,21 @@ function configureWebPush() {
   const privateKey = process.env.VAPID_PRIVATE_KEY;
   const subject = process.env.VAPID_SUBJECT || "mailto:admin@qurtek.id";
 
+  console.log("[PUSH] configureWebPush called", {
+    hasPublicKey: !!publicKey,
+    hasPrivateKey: !!privateKey,
+    publicKeyPrefix: publicKey?.substring(0, 20),
+    subject,
+  });
+
   if (!publicKey || !privateKey) {
+    console.log("[PUSH] Missing VAPID keys, skipping configuration");
     return;
   }
 
   webPush.setVapidDetails(subject, publicKey, privateKey);
   isConfigured = true;
+  console.log("[PUSH] Web Push configured successfully");
 }
 
 async function loadSubscriptionsFromPushTable(
@@ -46,6 +55,7 @@ async function loadSubscriptionsFromPushTable(
 
     if (error) {
       if (isMissingColumnError(error)) continue;
+      console.error("[PUSH] Error loading subscriptions:", error);
       return [] as NormalizedSubscription[];
     }
 
@@ -96,12 +106,25 @@ export async function sendPushToTargets(
   targets: Array<{ shohibulId: string; portalUrl: string }>,
   payload: { title: string; message: string }
 ) {
+  console.log("[PUSH] Starting push notification...", {
+    targetsCount: targets.length,
+    title: payload.title,
+    message: payload.message,
+  });
+
   configureWebPush();
 
   const publicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
   const privateKey = process.env.VAPID_PRIVATE_KEY;
 
+  console.log("[PUSH] VAPID config check:", {
+    hasPublicKey: !!publicKey,
+    hasPrivateKey: !!privateKey,
+    publicKeyPrefix: publicKey?.substring(0, 20),
+  });
+
   if (!publicKey || !privateKey || targets.length === 0) {
+    console.log("[PUSH] Early return - missing keys or no targets");
     return { sent: 0, skipped: targets.length };
   }
 
@@ -111,14 +134,25 @@ export async function sendPushToTargets(
   const supabase = getSupabaseServerClient();
   const pushTable = await resolveTableName(supabase, "push_subscriptions");
   if (!pushTable) {
+    console.log("[PUSH] No push_subscriptions table found");
     return { sent: 0, skipped: targets.length };
   }
 
+  console.log("[PUSH] Loading subscriptions for targetIds:", targetIds);
   const subscriptions = await loadSubscriptionsFromPushTable(supabase, pushTable, targetIds);
 
+  console.log("[PUSH] Found subscriptions:", subscriptions.length);
+
   if (!subscriptions.length) {
+    console.log("[PUSH] No active subscriptions found for targets");
     return { sent: 0, skipped: targets.length };
   }
+
+  console.log("[PUSH] Subscriptions details:", subscriptions.map(s => ({
+    id: s.id,
+    shohibul_id: s.shohibul_id,
+    endpoint: s.endpoint.substring(0, 50) + "...",
+  })));
 
   const results = await Promise.allSettled(
     subscriptions.map((item) => {
@@ -143,6 +177,12 @@ export async function sendPushToTargets(
     })
   );
 
+  console.log("[PUSH] Send results:", results.map((r, i) => ({
+    index: i,
+    status: r.status,
+    reason: r.status === "rejected" ? (r.reason as any)?.statusCode || r.reason : null,
+  })));
+
   if (pushTable) {
     const invalidIds = results
       .map((result, index) => ({ result, id: subscriptions[index]?.id }))
@@ -154,6 +194,7 @@ export async function sendPushToTargets(
       .map((item) => item.id as string);
 
     if (invalidIds.length > 0) {
+      console.log("[PUSH] Deactivating invalid subscriptions:", invalidIds);
       await Promise.allSettled(
         invalidIds.map((id) =>
           supabase
@@ -166,5 +207,6 @@ export async function sendPushToTargets(
   }
 
   const sent = results.filter((item) => item.status === "fulfilled").length;
+  console.log("[PUSH] Final result:", { sent, skipped: subscriptions.length - sent });
   return { sent, skipped: subscriptions.length - sent };
 }

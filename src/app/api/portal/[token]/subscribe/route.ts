@@ -48,6 +48,13 @@ export async function POST(
     const p256dh = String(body?.keys?.p256dh ?? "").trim();
     const auth = String(body?.keys?.auth ?? "").trim();
 
+    console.log("[SUBSCRIBE] Received subscription request:", {
+      token: token.substring(0, 10) + "...",
+      endpoint: endpoint.substring(0, 50) + "...",
+      hasP256dh: !!p256dh,
+      hasAuth: !!auth,
+    });
+
     if (!endpoint || !p256dh || !auth) {
       return NextResponse.json({ error: "Subscription tidak valid." }, { status: 400 });
     }
@@ -87,6 +94,8 @@ export async function POST(
       return NextResponse.json({ error: "Link shohibul tidak valid." }, { status: 404 });
     }
 
+    console.log("[SUBSCRIBE] Found shohibul:", { id: shohibul.id });
+
     const pushTable = await resolveTableName(supabase, "push_subscriptions");
 
     if (!pushTable) {
@@ -113,6 +122,11 @@ export async function POST(
     let upserted = false;
     let upsertError: unknown = null;
 
+    console.log("[SUBSCRIBE] Attempting to upsert subscription:", {
+      shohibul_id: shohibul.id,
+      endpoint: endpoint.substring(0, 50) + "...",
+    });
+
     for (const payload of upsertPayloads) {
       const result = await supabase
         .from(pushTable)
@@ -121,17 +135,21 @@ export async function POST(
       if (!result.error) {
         upserted = true;
         upsertError = null;
+        console.log("[SUBSCRIBE] Subscription saved successfully");
         break;
       }
 
       upsertError = result.error;
+      console.log("[SUBSCRIBE] Upsert attempt failed:", result.error);
       if (!isMissingColumnError(result.error)) break;
     }
 
     if (!upserted && upsertError) throw upsertError;
 
+    console.log("[SUBSCRIBE] Subscription completed successfully");
     return NextResponse.json({ ok: true });
   } catch (error) {
+    console.error("[SUBSCRIBE] Error:", error);
     return NextResponse.json(
       { error: getReadableErrorMessage(error, "Gagal menyimpan subscription.") },
       { status: 500 }
