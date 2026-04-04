@@ -49,10 +49,13 @@ async function loadSubscriptionsFromPushTable(
       return [] as NormalizedSubscription[];
     }
 
-    const rows = (data ?? []) as Array<Record<string, unknown>>;
+    const rows = (data ?? []) as unknown[];
     const normalized: NormalizedSubscription[] = [];
 
-    for (const item of rows) {
+    for (const raw of rows) {
+      if (!raw || typeof raw !== "object") continue;
+      const item = raw as Record<string, unknown>;
+
       const shohibulId =
         typeof item.shohibul_id === "string" ? item.shohibul_id.trim() : "";
       const endpoint =
