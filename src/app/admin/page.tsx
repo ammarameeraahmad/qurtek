@@ -641,7 +641,7 @@ export default function AdminPage() {
               <h1 className="mt-2 text-4xl font-bold text-[#141414]">Dashboard Hari-H Dokumentasi Qurban</h1>
               <p className="mt-2 max-w-3xl text-sm text-[#475467]">
                 Kelola data shohibul, hewan, petugas, generate link dan QR code, lalu pantau progress
-                dokumentasi real-time sesuai SOP plan.md.
+                dokumentasi real-time.
               </p>
             </div>
             <button
@@ -1171,3 +1171,4 @@ function StatCard({ label, value, accent }: { label: string; value: number; acce
     </article>
   );
 }
+
